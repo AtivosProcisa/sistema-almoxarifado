@@ -287,6 +287,20 @@ if selecao_perfil and selecao_perfil.startswith("1"):
         if arquivo_up:
             try:
                 df_up = pd.read_excel(arquivo_up)
+                
+                # --- NOVO CÓDIGO DE LIMPEZA DE CABEÇALHOS ---
+                # Converte tudo para minúsculas e remove espaços invisíveis
+                df_up.columns = df_up.columns.str.strip().str.lower()
+                # Remove os acentos para casar exatamente com o Supabase
+                df_up.columns = (df_up.columns.str.replace('ô', 'o')
+                                 .str.replace('é', 'e')
+                                 .str.replace('í', 'i')
+                                 .str.replace('ç', 'c')
+                                 .str.replace('ã', 'a')
+                                 .str.replace('á', 'a')
+                                 .str.replace('ú', 'u')
+                                 .str.replace(' ', '_'))
+                
                 st.write("Pré-visualização dos dados a serem importados:")
                 st.dataframe(df_up.head(3), use_container_width=True)
                 
