@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import os
 import tempfile
+import io
 
 try:
     from fpdf import FPDF
@@ -246,13 +247,56 @@ if selecao_perfil and selecao_perfil.startswith("1"):
     col3.metric("Em Uso (Campo)", em_uso)
     col4.metric("Divergências Pendentes", diverg_pend, delta_color="inverse")
 
-    aba_inv, aba_hist_mov, aba_hist_termos = st.tabs(["Inventário Geral", "Histórico de Movimentações", "Termos Emitidos"])
+    aba_inv, aba_hist_mov, aba_hist_termos, aba_io = st.tabs(["Inventário Geral", "Histórico de Movimentações", "Termos Emitidos", "🔄 Importar / Exportar"])
+    
     with aba_inv:
         st.dataframe(df_ativos, use_container_width=True)
     with aba_hist_mov:
         st.dataframe(df_mov, use_container_width=True)
     with aba_hist_termos:
         st.dataframe(df_termos, use_container_width=True)
+        
+    with aba_io:
+        st.subheader("Exportar Relatórios (Download)")
+        st.write("Baixe a base de ativos atualizada diretamente da nuvem para o seu computador.")
+        
+        # Função para converter DataFrame em Excel em memória
+        def converter_df_excel(df):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='Base_Ativos')
+            return output.getvalue()
+
+        if not df_ativos.empty:
+            excel_data = converter_df_excel(df_ativos)
+            st.download_button(
+                label="📥 Baixar Base de Ativos (.xlsx)", 
+                data=excel_data, 
+                file_name=f"Base_Ativos_Procisa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.info("A base de ativos está vazia.")
+
+        st.divider()
+
+        st.subheader("Carga Inicial / Atualização em Massa (Upload)")
+        st.warning("⚠️ O arquivo Excel deve conter exatamente as mesmas colunas da base de dados. Registros com o mesmo 'patrimonio_placa' serão substituídos.")
+        
+        arquivo_up = st.file_uploader("Arraste o arquivo Excel (.xlsx)", type=["xlsx"])
+        if arquivo_up:
+            try:
+                df_up = pd.read_excel(arquivo_up)
+                st.write("Pré-visualização dos dados a serem importados:")
+                st.dataframe(df_up.head(3), use_container_width=True)
+                
+                if st.button("🚀 Confirmar e Subir para a Nuvem", type="primary"):
+                    with st.spinner("A enviar dados para o Supabase..."):
+                        if salvar_dados(df_up, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()):
+                            st.success("Carga realizada com sucesso! A base de dados foi atualizada.")
+                            st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo Excel: {e}")
 
 # ==========================================
 # MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO
