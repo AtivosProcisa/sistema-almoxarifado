@@ -48,6 +48,16 @@ COLUNAS_TERMOS = ['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade
 COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_divergencia', 'status_resolucao', 'analista_responsavel', 'observacoes']
 COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
 
+ASSINATURA_DEV_HTML = """
+<div style='text-align: center; margin-top: 25px; padding: 10px; color: #6c757d; font-size: 0.85rem; border-top: 1px solid #e9ecef;'>
+    💻 Desenvolvido por <strong>Marcos Paulo Da Veiga Carvalho</strong>
+</div>
+"""
+
+def exibir_marca_desenvolvedor():
+    """Renderiza a marca do desenvolvedor de forma padronizada."""
+    st.markdown(ASSINATURA_DEV_HTML, unsafe_allow_html=True)
+
 def normalizar_nome_coluna(col):
     """Remove qualquer acento (õ, ó, ô, ç, ã, é, í, etc.), espaços extras e converte para minúsculas."""
     texto = str(col).strip().lower()
@@ -220,6 +230,9 @@ if not st.session_state.logged_in:
             submit_login = st.form_submit_button("Entrar no Sistema", use_container_width=True)
             if submit_login:
                 fazer_login(usuario_input, senha_input)
+        
+        # Marca do Desenvolvedor na tela de Login
+        exibir_marca_desenvolvedor()
     st.stop()
 
 # ==========================================
@@ -306,6 +319,16 @@ for opcao in opcoes_menu:
         st.session_state.modulo_ativo = opcao
         st.rerun()
 
+# Marca do Desenvolvedor na Barra Lateral para o Modo Gestão (Master)
+if st.session_state.perfil == 'Master':
+    st.sidebar.markdown("---")
+    st.sidebar.markdown(
+        "<div style='text-align: center; color: #6c757d; font-size: 0.78rem;'>"
+        "💻 Desenvolvido por<br><strong>Marcos Paulo Da Veiga Carvalho</strong>"
+        "</div>",
+        unsafe_allow_html=True
+    )
+
 selecao_perfil = st.session_state.modulo_ativo
 
 # ==========================================
@@ -313,6 +336,7 @@ selecao_perfil = st.session_state.modulo_ativo
 # ==========================================
 if selecao_perfil and selecao_perfil.startswith("1"):
     st.header("📊 Painel Gerencial e Conciliação")
+    st.caption("💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
     # Exibe alerta persistente caso uma carga ou cadastro tenha acabado de ocorrer
     if 'resumo_ultima_operacao' in st.session_state and st.session_state.resumo_ultima_operacao:
@@ -488,6 +512,9 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo Excel: {e}")
+
+    # Rodapé de Desenvolvedor no Módulo de Gestão
+    exibir_marca_desenvolvedor()
 
 # ==========================================
 # MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO
@@ -729,6 +756,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("5"):
     st.header("👥 Painel Admin - Gestão de Usuários")
+    st.caption("💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
     aba_listar, aba_novo, aba_editar = st.tabs(["Visão Geral", "Novo Usuário", "Editar / Resetar Senha"])
     
@@ -800,6 +828,8 @@ elif selecao_perfil and selecao_perfil.startswith("5"):
                         else:
                             st.warning("Não é possível excluir o usuário Master principal.")
 
+    exibir_marca_desenvolvedor()
+
 # ==========================================
 # MÓDULO 6: AUDITORIA GERAL (EXCLUSIVO GESTOR)
 # ==========================================
@@ -809,7 +839,7 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
         st.stop()
         
     st.header("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
-    st.caption("Registro completo e imutável de uploads, alterações de saldo, cadastros, movimentações e acessos no sistema.")
+    st.caption("Registro completo e imutável de uploads, alterações de saldo, cadastros, movimentações e acessos no sistema. | 💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
     # Consolida logs do sistema + histórico de movimentações + emissões de termos em uma linha do tempo única
     lista_eventos = []
@@ -894,3 +924,5 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
         )
     else:
         st.info("Nenhum evento de auditoria registrado até o momento.")
+
+    exibir_marca_desenvolvedor()
