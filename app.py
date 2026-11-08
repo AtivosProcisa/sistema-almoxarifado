@@ -20,12 +20,12 @@ st.set_page_config(page_title="Gestão de Ativos e Equipamentos", layout="wide")
 # ==========================================
 # CONFIGURAÇÃO DO SUPABASE (NUVEM)
 # ==========================================
-SUPABASE_URL = https://qptzxnxjhpfqdkmsblct.supabase.co/rest/v1/ 
-SUPABASE_KEY = sb_publishable_y0JUFibeIhU-DBDcGFmREA_IlgsfNa0
+SUPABASE_URL = "https://qptzxnxjhpfqdkmsblct.supabase.co/rest/v1/" 
+SUPABASE_KEY = "sb_publishable_y0JUFibeIhU-DBDcGFmREA_IlgsfNa0"
 
 @st.cache_resource
 def init_connection():
-    if SUPABASE_URL == https://qptzxnxjhpfqdkmsblct.supabase.co/rest/v1/ 
+    if SUPABASE_URL == "https://qptzxnxjhpfqdkmsblct.supabase.co/rest/v1/" 
         return None
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
