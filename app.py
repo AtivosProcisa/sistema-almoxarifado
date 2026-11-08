@@ -247,7 +247,9 @@ if selecao_perfil and selecao_perfil.startswith("1"):
     col3.metric("Em Uso (Campo)", em_uso)
     col4.metric("Divergências Pendentes", diverg_pend, delta_color="inverse")
 
-    aba_inv, aba_hist_mov, aba_hist_termos, aba_io = st.tabs(["Inventário Geral", "Histórico de Movimentações", "Termos Emitidos", "🔄 Importar / Exportar"])
+    aba_inv, aba_hist_mov, aba_hist_termos, aba_cadastro, aba_io = st.tabs([
+        "Inventário Geral", "Histórico de Movimentações", "Termos Emitidos", "➕ Novo Cadastro Manual", "🔄 Importar / Exportar"
+    ])
     
     with aba_inv:
         st.dataframe(df_ativos, use_container_width=True)
@@ -256,11 +258,58 @@ if selecao_perfil and selecao_perfil.startswith("1"):
     with aba_hist_termos:
         st.dataframe(df_termos, use_container_width=True)
         
+    with aba_cadastro:
+        st.subheader("Cadastrar Ativo Individual")
+        with st.form("form_novo_ativo"):
+            colA, colB, colC = st.columns(3)
+            with colA:
+                cad_patrimonio = st.text_input("Patrimônio / Placa *")
+                cad_codigo = st.text_input("Código D365")
+                cad_serie = st.text_input("Número de Série")
+            with colB:
+                cad_marca = st.text_input("Marca")
+                cad_modelo = st.text_input("Modelo")
+                cad_categoria = st.selectbox("Categoria", ["OTDR", "Máquina de Fusão", "Ferramenta", "Veículo", "Informática", "Outros"])
+            with colC:
+                cad_status = st.selectbox("Status", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+                cad_condicao = st.selectbox("Condição Física", ["Novo", "Bom", "Regular", "Ruim", "Inservível"])
+                cad_loc = st.text_input("Localização Atual", value="Almoxarifado Central")
+            
+            cad_obs = st.text_area("Observações")
+            
+            submit_cadastro = st.form_submit_button("💾 Salvar Ativo", type="primary")
+            
+            if submit_cadastro:
+                if cad_patrimonio:
+                    cad_patrimonio = cad_patrimonio.strip()
+                    if not df_ativos.empty and cad_patrimonio in df_ativos['patrimonio_placa'].values:
+                        st.error("Um ativo com este Patrimônio/Placa já está cadastrado no sistema.")
+                    else:
+                        novo_ativo = pd.DataFrame([{
+                            'codigo_d365': cad_codigo.strip(),
+                            'patrimonio_placa': cad_patrimonio,
+                            'numero_serie': cad_serie.strip(),
+                            'marca': cad_marca.strip(),
+                            'modelo': cad_modelo.strip(),
+                            'categoria': cad_categoria,
+                            'status_sistema': cad_status,
+                            'condicao_fisica': cad_condicao,
+                            'localizacao_atual': cad_loc.strip(),
+                            'responsavel_atual': 'Almoxarifado',
+                            'data_ultima_mov': datetime.now().strftime('%Y-%m-%d'),
+                            'observacoes': cad_obs.strip()
+                        }])
+                        df_ativos_temp = pd.concat([df_ativos, novo_ativo], ignore_index=True)
+                        if salvar_dados(df_ativos_temp, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()):
+                            st.success(f"Ativo {cad_patrimonio} cadastrado com sucesso!")
+                            st.rerun()
+                else:
+                    st.error("O campo 'Patrimônio / Placa' é obrigatório.")
+
     with aba_io:
         st.subheader("Exportar Relatórios (Download)")
         st.write("Baixe a base de ativos atualizada diretamente da nuvem para o seu computador.")
         
-        # Função para converter DataFrame em Excel em memória
         def converter_df_excel(df):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -288,11 +337,10 @@ if selecao_perfil and selecao_perfil.startswith("1"):
             try:
                 df_up = pd.read_excel(arquivo_up)
                 
-                # --- NOVO CÓDIGO DE LIMPEZA DE CABEÇALHOS ---
-                # Converte tudo para minúsculas e remove espaços invisíveis
+                # --- LIMPEZA CORRIGIDA DE CABEÇALHOS (INCLUINDO 'ó') ---
                 df_up.columns = df_up.columns.str.strip().str.lower()
-                # Remove os acentos para casar exatamente com o Supabase
                 df_up.columns = (df_up.columns.str.replace('ô', 'o')
+                                 .str.replace('ó', 'o') 
                                  .str.replace('é', 'e')
                                  .str.replace('í', 'i')
                                  .str.replace('ç', 'c')
