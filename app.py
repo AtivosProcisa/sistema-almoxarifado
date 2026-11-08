@@ -50,13 +50,13 @@ COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_diverge
 COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
 
 ASSINATURA_DEV_HTML = """
-<div style='text-align: center; margin-top: 25px; padding: 10px; color: #6c757d; font-size: 0.85rem; border-top: 1px solid #e9ecef;'>
-    💻 Desenvolvido por <strong>Marcos Paulo Da Veiga Carvalho</strong>
+<div style='text-align: center; margin-top: 20px; padding: 6px; color: #888888; font-size: 0.75rem;'>
+    Desenvolvido por <strong>Marcos Paulo Da Veiga Carvalho</strong>
 </div>
 """
 
 def exibir_marca_desenvolvedor():
-    """Renderiza a marca do desenvolvedor de forma padronizada."""
+    """Renderiza a marca do desenvolvedor de forma discreta."""
     st.markdown(ASSINATURA_DEV_HTML, unsafe_allow_html=True)
 
 def normalizar_nome_coluna(col):
@@ -111,10 +111,8 @@ def calcular_uso_supabase(dfs_lista, limite_mb=500.0):
         if not df.empty:
             total_linhas += len(df)
             dados_json = json.dumps(df.fillna("").astype(str).to_dict(orient='records'), ensure_ascii=False)
-            # Fator 2.2x para compensar cabeçalhos de tuplas PostgreSQL e índices B-Tree
             total_bytes += int(len(dados_json.encode('utf-8')) * 2.2)
             
-    # Adiciona ~8.5 MB base do template/catálogo interno do PostgreSQL no Supabase
     bytes_base_sistema = int(8.5 * 1024 * 1024)
     total_bytes_real = total_bytes + bytes_base_sistema
     
@@ -158,7 +156,6 @@ def carregar_dados():
         if not df_ativos.empty:
             df_ativos['patrimonio_placa'] = df_ativos['patrimonio_placa'].astype(str).str.strip()
 
-        # Separa o que é Divergência Física real do que é Log de Auditoria do Sistema
         if not df_diverg_bruto.empty and 'tipo_divergencia' in df_diverg_bruto.columns:
             df_diverg_bruto['status_resolucao'] = df_diverg_bruto['status_resolucao'].fillna('Pendente').replace("", "Pendente")
             mask_log = df_diverg_bruto['tipo_divergencia'].astype(str).str.startswith('[LOG-SISTEMA]')
@@ -263,7 +260,6 @@ if not st.session_state.logged_in:
             if submit_login:
                 fazer_login(usuario_input, senha_input)
         
-        # Marca do Desenvolvedor na tela de Login
         exibir_marca_desenvolvedor()
     st.stop()
 
@@ -351,12 +347,11 @@ for opcao in opcoes_menu:
         st.session_state.modulo_ativo = opcao
         st.rerun()
 
-# Marca do Desenvolvedor na Barra Lateral para o Modo Gestão (Master)
 if st.session_state.perfil == 'Master':
     st.sidebar.markdown("---")
     st.sidebar.markdown(
-        "<div style='text-align: center; color: #6c757d; font-size: 0.78rem;'>"
-        "💻 Desenvolvido por<br><strong>Marcos Paulo Da Veiga Carvalho</strong>"
+        "<div style='text-align: center; color: #888888; font-size: 0.72rem;'>"
+        "Desenvolvido por<br><strong>Marcos Paulo Da Veiga Carvalho</strong>"
         "</div>",
         unsafe_allow_html=True
     )
@@ -368,9 +363,7 @@ selecao_perfil = st.session_state.modulo_ativo
 # ==========================================
 if selecao_perfil and selecao_perfil.startswith("1"):
     st.header("📊 Painel Gerencial e Conciliação")
-    st.caption("💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
-    # Exibe alerta persistente caso uma carga ou cadastro tenha acabado de ocorrer
     if 'resumo_ultima_operacao' in st.session_state and st.session_state.resumo_ultima_operacao:
         info_op = st.session_state.resumo_ultima_operacao
         st.success(f"✅ **{info_op['titulo']}** | Sistema atualizado às {info_op['hora']}")
@@ -505,7 +498,6 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                     df_up = df_up[df_up['patrimonio_placa'] != '']
                     df_up = df_up.drop_duplicates(subset=['patrimonio_placa'], keep='last')
                     
-                    # Cálculo de Antes e Depois antes de enviar
                     atuais_set = set(df_ativos['patrimonio_placa'].astype(str).str.strip()) if not df_ativos.empty else set()
                     novos_set = set(df_up['patrimonio_placa'])
                     
@@ -545,7 +537,6 @@ if selecao_perfil and selecao_perfil.startswith("1"):
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo Excel: {e}")
 
-    # Rodapé de Desenvolvedor no Módulo de Gestão
     exibir_marca_desenvolvedor()
 
 # ==========================================
@@ -788,7 +779,6 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("5"):
     st.header("👥 Painel Admin - Gestão de Usuários")
-    st.caption("💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
     aba_listar, aba_novo, aba_editar = st.tabs(["Visão Geral", "Novo Usuário", "Editar / Resetar Senha"])
     
@@ -871,38 +861,16 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
         st.stop()
         
     st.header("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
-    st.caption("Registro completo e imutável de uploads, alterações de saldo, cadastros, movimentações e acessos no sistema. | 💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
-    # --- MONITORAMENTO DE CAPACIDADE DO SUPABASE ---
+    # --- LINHA DISCRETA DE CAPACIDADE DO SUPABASE ---
     info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios], limite_mb=500.0)
-    
-    with st.container(border=True):
-        st.subheader("☁️ Capacidade de Armazenamento — Banco de Dados Supabase (Plano 500 MB)")
-        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
-        col_c1.metric(
-            "Espaço Utilizado (Total)", 
-            f"{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.2f}%)",
-            help=f"Inclui ~8.5 MB do motor PostgreSQL + {info_cap['dados_puros_kb']:.1f} KB de dados e índices das tabelas."
-        )
-        col_c2.metric(
-            "Espaço Livre Disponível", 
-            f"{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.2f}%)"
-        )
-        col_c3.metric(
-            "Volume de Dados das Tabelas", 
-            f"{info_cap['dados_puros_kb']:.1f} KB"
-        )
-        col_c4.metric(
-            "Total de Linhas Armazenadas", 
-            f"{info_cap['total_linhas']} reg."
-        )
-        
-        st.progress(
-            min(1.0, info_cap['pct_usado'] / 100.0), 
-            text=f"Status do Armazenamento: {info_cap['pct_usado']:.2f}% Utilizado | {info_cap['pct_livre']:.2f}% Livre (Capacidade Total: {info_cap['limite_mb']:.0f} MB)"
-        )
-
-    st.divider()
+    st.markdown(
+        f"<div style='background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px 14px; font-size: 0.80rem; color: #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>"
+        f"<span>☁️ <b>Armazenamento Supabase (500 MB):</b> Utilizado: <b>{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.1f}%)</b> &nbsp;|&nbsp; Livre: <b>{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.1f}%)</b> &nbsp;|&nbsp; Tabelas: {info_cap['dados_puros_kb']:.1f} KB ({info_cap['total_linhas']} reg.)</span>"
+        f"<span style='color: #888; font-size: 0.74rem;'>Desenvolvido por Marcos Paulo Da Veiga Carvalho</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     # Consolida logs do sistema + histórico de movimentações + emissões de termos em uma linha do tempo única
     lista_eventos = []
@@ -974,7 +942,6 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
             
         st.dataframe(df_filtrado, use_container_width=True, height=450)
         
-        # Botão para baixar o relatório de auditoria em Excel
         out_aud = io.BytesIO()
         with pd.ExcelWriter(out_aud, engine='openpyxl') as writer:
             df_filtrado.to_excel(writer, index=False, sheet_name='Auditoria_Sistema')
