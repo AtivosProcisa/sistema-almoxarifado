@@ -5,6 +5,7 @@ import os
 import tempfile
 import io
 import unicodedata
+import json
 
 try:
     from fpdf import FPDF
@@ -101,6 +102,37 @@ def registrar_log_auditoria(acao, alvo, detalhes):
         supabase.table('divergencias').upsert([registro]).execute()
     except Exception:
         pass
+
+def calcular_uso_supabase(dfs_lista, limite_mb=500.0):
+    """Calcula a estimativa de armazenamento utilizado no PostgreSQL/Supabase (com overhead de índices)."""
+    total_bytes = 0
+    total_linhas = 0
+    for df in dfs_lista:
+        if not df.empty:
+            total_linhas += len(df)
+            dados_json = json.dumps(df.fillna("").astype(str).to_dict(orient='records'), ensure_ascii=False)
+            # Fator 2.2x para compensar cabeçalhos de tuplas PostgreSQL e índices B-Tree
+            total_bytes += int(len(dados_json.encode('utf-8')) * 2.2)
+            
+    # Adiciona ~8.5 MB base do template/catálogo interno do PostgreSQL no Supabase
+    bytes_base_sistema = int(8.5 * 1024 * 1024)
+    total_bytes_real = total_bytes + bytes_base_sistema
+    
+    usado_mb = total_bytes_real / (1024 * 1024)
+    dados_puros_kb = total_bytes / 1024
+    livre_mb = max(0.0, limite_mb - usado_mb)
+    pct_usado = min(100.0, (usado_mb / limite_mb) * 100)
+    pct_livre = max(0.0, 100.0 - pct_usado)
+    
+    return {
+        'usado_mb': usado_mb,
+        'dados_puros_kb': dados_puros_kb,
+        'livre_mb': livre_mb,
+        'limite_mb': limite_mb,
+        'pct_usado': pct_usado,
+        'pct_livre': pct_livre,
+        'total_linhas': total_linhas
+    }
 
 # ==========================================
 # GESTÃO DE DADOS (SUPABASE)
@@ -841,6 +873,37 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
     st.header("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
     st.caption("Registro completo e imutável de uploads, alterações de saldo, cadastros, movimentações e acessos no sistema. | 💻 Desenvolvido por Marcos Paulo Da Veiga Carvalho")
     
+    # --- MONITORAMENTO DE CAPACIDADE DO SUPABASE ---
+    info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios], limite_mb=500.0)
+    
+    with st.container(border=True):
+        st.subheader("☁️ Capacidade de Armazenamento — Banco de Dados Supabase (Plano 500 MB)")
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        col_c1.metric(
+            "Espaço Utilizado (Total)", 
+            f"{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.2f}%)",
+            help=f"Inclui ~8.5 MB do motor PostgreSQL + {info_cap['dados_puros_kb']:.1f} KB de dados e índices das tabelas."
+        )
+        col_c2.metric(
+            "Espaço Livre Disponível", 
+            f"{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.2f}%)"
+        )
+        col_c3.metric(
+            "Volume de Dados das Tabelas", 
+            f"{info_cap['dados_puros_kb']:.1f} KB"
+        )
+        col_c4.metric(
+            "Total de Linhas Armazenadas", 
+            f"{info_cap['total_linhas']} reg."
+        )
+        
+        st.progress(
+            min(1.0, info_cap['pct_usado'] / 100.0), 
+            text=f"Status do Armazenamento: {info_cap['pct_usado']:.2f}% Utilizado | {info_cap['pct_livre']:.2f}% Livre (Capacidade Total: {info_cap['limite_mb']:.0f} MB)"
+        )
+
+    st.divider()
+
     # Consolida logs do sistema + histórico de movimentações + emissões de termos em uma linha do tempo única
     lista_eventos = []
     
