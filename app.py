@@ -438,7 +438,7 @@ selecao_perfil = st.session_state.modulo_ativo
 if selecao_perfil and selecao_perfil.startswith("1"):
     st.header("📊 Painel Gerencial e Conciliação")
     
-    if 'resumo_ultima_operacao' in st.session_state and st.session_state.resumo_ultima_operacao:
+    if st.session_state.get('resumo_ultima_operacao'):
         info_op = st.session_state.resumo_ultima_operacao
         st.success(f"✅ **{info_op['titulo']}** | Sistema atualizado às {info_op['hora']}")
         c_op1, c_op2, c_op3, c_op4 = st.columns(4)
@@ -451,7 +451,6 @@ if selecao_perfil and selecao_perfil.startswith("1"):
             st.rerun()
         st.divider()
 
-    # Cálculo Exato do Estoque (Disponível + Almoxarifado)
     total_ativos = len(df_ativos)
     if not df_ativos.empty:
         cautela_upper = df_ativos['cautela'].fillna("").astype(str).str.upper()
@@ -803,21 +802,7 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
 elif selecao_perfil and selecao_perfil.startswith("3"):
     st.header("✅ Central de Validações (Almoxarifado)")
     
-    # Tratamento de Alertas de Sucesso e Termos Automáticos gerados
-    if st.session_state.pdf_termo_pronto:
-        st.success("✅ Validação concluída! O Termo de Responsabilidade foi gerado automaticamente com os dados do Colaborador.")
-        st.download_button(
-            label="📥 Baixar Termo PDF (Auto-Gerado)", 
-            data=st.session_state.pdf_termo_pronto['bytes'], 
-            file_name=st.session_state.pdf_termo_pronto['nome_arquivo'], 
-            mime='application/pdf',
-            type="primary"
-        )
-        if st.button("✖️ Fechar Aviso"):
-            st.session_state.pdf_termo_pronto = None
-            st.rerun()
-        st.divider()
-    elif st.session_state.msg_sucesso:
+    if st.session_state.get('msg_sucesso'):
         st.success(st.session_state.msg_sucesso)
         if st.button("✖️ Fechar Aviso"):
             st.session_state.msg_sucesso = None
@@ -863,7 +848,6 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                     if btn_validar:
                         if d365_ok and eponto_ok and fisico_ok:
                             try:
-                                # 1. Atualiza Ativo
                                 dados_update_ativo = {
                                     'status_sistema': novo_status,
                                     'cautela': nova_cautela.strip(),
@@ -874,35 +858,16 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                                 }
                                 supabase.table('ativos_master').update(dados_update_ativo).eq('patrimonio', pat_real).execute()
                                 
-                                # 2. Atualiza Movimentação
                                 dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
                                 supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_selecionado).execute()
                                 
-                                # 3. Se for MOV-01 (Almoxarifado -> Colaborador), Gera o Termo Automaticamente
                                 if str(mov_atual.get('tipo_mov', '')).startswith("MOV-01"):
                                     mat_solic = str(mov_atual.get('matricula_solicitante', '')).strip()
                                     match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_solic] if not df_empregados.empty else pd.DataFrame()
                                     emp = match_emp.iloc[0].fillna("").to_dict() if not match_emp.empty else {}
                                     
                                     resp_nome = emp.get('nome', mov_atual.get('destino', ''))
-                                    resp_cpf = emp.get('cpf', '')
-                                    resp_rg = emp.get('rg', '')
-                                    resp_proj = emp.get('projeto', mov_atual.get('projeto', ''))
                                     resp_unid = emp.get('unidade', mov_atual.get('coordenacao', ''))
-                                    
-                                    caminho_pdf = gerar_termo_pdf(
-                                        patrimonio=pat_real,
-                                        responsavel=resp_nome,
-                                        matricula=mat_solic,
-                                        cpf=resp_cpf,
-                                        rg=resp_rg,
-                                        projeto=resp_proj,
-                                        unidade=resp_unid,
-                                        info_ativo=pd.DataFrame([registro_atual])
-                                    )
-                                    
-                                    with open(caminho_pdf, "rb") as pdf_file: 
-                                        PDFbyte = pdf_file.read()
                                     
                                     id_termo = f"TRM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                                     novo_termo = {
@@ -913,15 +878,12 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                                         'unidade': resp_unid, 
                                         'data_emissao': datetime.now().strftime('%Y-%m-%d'), 
                                         'data_baixa': '', 
-                                        'status_termo': 'Ativo'
+                                        'status_termo': 'Pendente Impressão'
                                     }
                                     supabase.table('termos').insert(novo_termo).execute()
-                                    registrar_log_auditoria("EMISSÃO DE TERMO (AUTO)", pat_real, f"Termo {id_termo} gerado na validação para {resp_nome}.")
+                                    registrar_log_auditoria("TERMO NA FILA", pat_real, f"Termo {id_termo} gerado e enviado para Fila de Impressão.")
                                     
-                                    st.session_state.pdf_termo_pronto = {
-                                        'bytes': PDFbyte,
-                                        'nome_arquivo': f"Termo_{pat_real}.pdf"
-                                    }
+                                    st.session_state.msg_sucesso = "✅ Validação concluída! O Termo de Responsabilidade foi enviado para a Fila de Impressão (abaixo)."
                                 else:
                                     st.session_state.msg_sucesso = "✅ Ciclo de movimentação fechado! Dashboard atualizado em tempo real."
                                 
@@ -975,13 +937,82 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("4"):
     st.header("📄 Gestão de Termos e Divergências")
-    aba_termos, aba_diverg = st.tabs(["Emissão e Baixa de Termos Avulsos", "Tratar Divergências"])
+    
+    if st.session_state.get('pdf_termo_pronto'):
+        st.success(st.session_state.pdf_termo_pronto.get('msg', "✅ Termo gerado com sucesso!"))
+        st.download_button(
+            label="📥 Baixar Termo PDF", 
+            data=st.session_state.pdf_termo_pronto['bytes'], 
+            file_name=st.session_state.pdf_termo_pronto['nome_arquivo'], 
+            mime='application/pdf',
+            type="primary"
+        )
+        if st.button("✖️ Fechar Aviso"):
+            st.session_state.pdf_termo_pronto = None
+            st.rerun()
+        st.divider()
+
+    aba_termos, aba_diverg = st.tabs(["Emissão e Baixa de Termos", "Tratar Divergências"])
     
     with aba_termos:
-        st.info("Nota: Transferências do Almoxarifado para Colaboradores (MOV-01) geram o termo automaticamente no ato da Validação. Utilize esta aba apenas para baixas (Devolução) ou emissões excecionais.")
-        opcao_termo = st.radio("Ação:", ["Encerrar Termo (Devolução)", "Emitir Novo Termo Excepcional"], horizontal=True)
+        # --- FILA DE IMPRESSÃO ---
+        st.markdown("###### 🖨️ Fila de Impressão (Termos Pendentes)")
+        st.caption("Termos gerados automaticamente pelas Movimentações (MOV-01) e que aguardam impressão e assinatura.")
+        termos_pendentes = df_termos[df_termos['status_termo'] == 'Pendente Impressão'] if not df_termos.empty else pd.DataFrame()
+        
+        if not termos_pendentes.empty:
+            st.dataframe(termos_pendentes[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'data_emissao']], use_container_width=True)
+            
+            col_f1, col_f2 = st.columns([3, 1])
+            with col_f1:
+                id_imp = st.selectbox("Selecione o Termo para Imprimir:", termos_pendentes['id_termo'].tolist())
+            with col_f2:
+                st.write("")
+                st.write("")
+                if st.button("🖨️ Gerar PDF e Ativar", type="primary", use_container_width=True):
+                    t_info = termos_pendentes[termos_pendentes['id_termo'] == id_imp].iloc[0]
+                    pat_real = t_info['patrimonio']
+                    mat = t_info['matricula']
+                    
+                    ativo_match = buscar_ativo(pat_real, df_ativos)
+                    emp_match = df_empregados[df_empregados['matricula'].astype(str) == str(mat)] if not df_empregados.empty else pd.DataFrame()
+                    
+                    if not ativo_match.empty:
+                        emp = emp_match.iloc[0].to_dict() if not emp_match.empty else {}
+                        resp_nome = t_info['responsavel']
+                        resp_cpf = emp.get('cpf', '')
+                        resp_rg = emp.get('rg', '')
+                        resp_proj = emp.get('projeto', ativo_match.iloc[0].get('projeto', ''))
+                        resp_unid = t_info['unidade']
+                        
+                        caminho_pdf = gerar_termo_pdf(pat_real, resp_nome, mat, resp_cpf, resp_rg, resp_proj, resp_unid, ativo_match)
+                        with open(caminho_pdf, "rb") as pdf_file: 
+                            PDFbyte = pdf_file.read()
+                        
+                        try:
+                            supabase.table('termos').update({'status_termo': 'Ativo'}).eq('id_termo', id_imp).execute()
+                            st.cache_data.clear()
+                            
+                            st.session_state.pdf_termo_pronto = {
+                                'bytes': PDFbyte,
+                                'nome_arquivo': f"Termo_{pat_real}.pdf",
+                                'msg': f"✅ Termo {id_imp} gerado e ativado no sistema!"
+                            }
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar status: {e}")
+                    else:
+                        st.error("Erro: Ativo vinculado a este termo não encontrado na base.")
+        else:
+            st.success("🎉 Nenhum termo pendente na fila de impressão.")
+            
+        st.divider()
+
+        # --- AÇÕES MANUAIS (AVULSAS E BAIXA) ---
+        opcao_termo = st.radio("Outras Ações:", ["Encerrar Termo (Devolução)", "Emitir Novo Termo Excepcional"], horizontal=True)
         
         if opcao_termo == "Emitir Novo Termo Excepcional":
+            st.info("Utilize esta opção apenas para emitir termos manuais fora do fluxo padrão de movimentação.")
             st.markdown("###### 🔍 Auto-Preenchimento de Colaborador")
             matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados:")
             
@@ -1035,18 +1066,14 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                     try:
                         supabase.table('termos').insert(novo_termo).execute()
                         st.cache_data.clear()
-                        registrar_log_auditoria(
-                            "EMISSÃO DE TERMO (AVULSO)", 
-                            pat_real, 
-                            f"Termo {id_termo} emitido manualmente para {responsavel_termo.strip()}."
-                        )
-                        st.success("✅ Termo registrado na nuvem! Clique abaixo para baixar o PDF.")
-                        st.download_button(
-                            label="📥 Baixar Termo PDF (Modelo PROCISA)", 
-                            data=PDFbyte, 
-                            file_name=f"Termo_PROCISA_{pat_real}.pdf", 
-                            mime='application/pdf'
-                        )
+                        registrar_log_auditoria("EMISSÃO DE TERMO (AVULSO)", pat_real, f"Termo {id_termo} emitido manualmente.")
+                        
+                        st.session_state.pdf_termo_pronto = {
+                            'bytes': PDFbyte,
+                            'nome_arquivo': f"Termo_{pat_real}.pdf",
+                            'msg': "✅ Termo registrado e ativado na nuvem!"
+                        }
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar termo: {e}")
                 else:
@@ -1058,7 +1085,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                 
                 if not ativo_info_baixa.empty:
                     pat_real = ativo_info_baixa.iloc[0]['patrimonio']
-                    termos_ativos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'] == 'Ativo')] if not df_termos.empty else pd.DataFrame()
+                    termos_ativos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
                     
                     if not termos_ativos.empty:
                         id_trm = termos_ativos.iloc[0]['id_termo']
