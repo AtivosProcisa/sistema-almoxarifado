@@ -674,7 +674,8 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
                 "MOV-01 | Almoxarifado -> Colaborador", 
                 "MOV-02 | Colaborador -> Almoxarifado", 
                 "MOV-03 | Unidade -> Unidade", 
-                "MOV-04 | Almoxarifado -> Laboratório"
+                "MOV-04 | Almoxarifado -> Laboratório",
+                "MOV-05 | Laboratório -> Almoxarifado"
             ]
             tipo_mov = st.selectbox("Tipo de Movimentação", opcoes_mov)
             patrimonio = st.text_input("Placa / Patrimônio do Ativo")
