@@ -43,7 +43,6 @@ if not supabase:
 # ==========================================
 # FUNÇÕES UTILITÁRIAS E DE HIGIENIZAÇÃO
 # ==========================================
-# Novas colunas baseadas no padrão V1.2
 COLUNAS_ATIVOS = [
     'item', 'valor', 'equipamento', 'marca', 'modelo', 'numero_serie', 
     'patrimonio', 'cautela', 'projeto', 'coordenacao', 'nf_procisa', 
@@ -65,9 +64,7 @@ def exibir_marca_desenvolvedor():
     st.markdown(ASSINATURA_DEV_HTML, unsafe_allow_html=True)
 
 def normalizar_nome_coluna(col):
-    """Remove qualquer acento, espaços e ajusta abreviações como Nº."""
     texto = str(col).strip().lower()
-    # Tratamento especial para o 'Nº SÉRIE' virar 'numero_serie'
     texto = texto.replace('nº', 'numero').replace('º', '').replace('ª', '')
     texto_sem_acento = ''.join(
         c for c in unicodedata.normalize('NFD', texto)
@@ -160,7 +157,6 @@ def carregar_dados():
         
         for col in COLUNAS_ATIVOS:
             if col not in df_ativos.columns:
-                # Se não existir status_sistema (pq o Excel novo não tem), assume como Disponível
                 df_ativos[col] = "Disponível" if col == 'status_sistema' else ""
                 
         if not df_ativos.empty:
@@ -283,7 +279,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     
     data_atual = datetime.now().strftime("%d/%m/%Y")
     
-    # Cabeçalho da Página 1 - Corrigido com bordas LTR / LBR para alinhamento perfeito
+    # Cabeçalho
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
     pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
@@ -301,7 +297,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), ln=True, align='C')
     
-    # Dados do Usuário (Auto-preenchidos)
+    # Dados do Usuário
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"Usuário: {responsavel}"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"RG: {rg}      CPF/MF: {cpf}      Matrícula: {matricula}"), ln=True)
@@ -310,7 +306,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     
     pdf.ln(5)
     
-    # Cláusulas (Página 1)
+    # Cláusulas
     pdf.set_font("Arial", '', 9)
     clausulas = [
         "1. O usuário infra-assinado recebe da PROCISA, nesta data, a expressa concessão do uso do(s) equipamento(s), conforme o estado descrito abaixo, com o objetivo de complementar suas ferramentas profissionais, no estrito exercício de sua função na PROCISA, desde que devidamente aprovado pelo seu Superior ou Responsável, que passa a ter a responsabilidade solidária por todos os atos decorrentes dessa concessão do uso do(s) equipamento(s).",
@@ -353,7 +349,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
     pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
     
-    # Adptado para as novas colunas
     marca = str(info_ativo.iloc[0].get('marca', ''))
     modelo = str(info_ativo.iloc[0].get('modelo', ''))
     serie = str(info_ativo.iloc[0].get('numero_serie', ''))
@@ -366,7 +361,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO: {condicao}"), ln=True)
     pdf.ln(5)
     
-    # Linhas extras para preenchimento manual
+    # Linhas extras
     for i in range(2, 6):
         pdf.cell(0, 6, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
         pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: _______________________________________"), ln=True)
@@ -579,7 +574,6 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                 df_up = pd.read_excel(arquivo_up)
                 df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
                 
-                # Se o excel nao tem a coluna status_sistema, criamos para não partir os indicadores
                 if 'status_sistema' not in df_up.columns:
                     df_up['status_sistema'] = 'Disponível'
                 
@@ -667,48 +661,71 @@ if selecao_perfil and selecao_perfil.startswith("1"):
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("2"):
     st.header("📝 Solicitação de Movimentação")
-    with st.form("form_solicitacao"):
-        col1, col2 = st.columns(2)
-        with col1:
-            opcoes_mov = [
-                "MOV-01 | Almoxarifado -> Colaborador", 
-                "MOV-02 | Colaborador -> Almoxarifado", 
-                "MOV-03 | Unidade -> Unidade", 
-                "MOV-04 | Almoxarifado -> Laboratório",
-                "MOV-05 | Laboratório -> Almoxarifado"
-            ]
-            tipo_mov = st.selectbox("Tipo de Movimentação", opcoes_mov)
-            patrimonio = st.text_input("Placa / Patrimônio do Ativo")
-            solicitante = st.text_input("Nome do Solicitante (Matrícula)", value=st.session_state.nome_real)
-        with col2:
-            origem = st.text_input("Unidade/Equipe de Origem")
-            destino = st.text_input("Unidade/Equipe de Destino")
-            motivo = st.text_area("Motivo da Movimentação")
+    st.write("Consulte o ativo para iniciar a solicitação de transferência ou devolução.")
+    
+    # Busca inteligente baseada no Módulo 3
+    patrimonio_busca = st.text_input("🔍 Digite o Patrimônio e pressione Enter para buscar:")
+    
+    if patrimonio_busca:
+        pat_busca_limpo = patrimonio_busca.strip()
+        ativo_info = df_ativos[df_ativos['patrimonio'].astype(str) == pat_busca_limpo] if not df_ativos.empty else pd.DataFrame()
         
-        if st.form_submit_button("Registrar Solicitação", type="primary"):
-            if patrimonio.strip() and solicitante.strip():
-                id_mov = f"MOV-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                pat_m = patrimonio.strip()
-                nova_mov = pd.DataFrame([{
-                    'id_mov': id_mov, 
-                    'data_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
-                    'tipo_mov': tipo_mov[:6], 
-                    'patrimonio': pat_m, 
-                    'origem': origem.strip(), 
-                    'destino': destino.strip(), 
-                    'solicitante': solicitante.strip(), 
-                    'autorizador': 'Pendente', 
-                    'status_mov': 'Aguardando Conferência'
-                }])
-                if salvar_dados(df_m=nova_mov):
-                    registrar_log_auditoria(
-                        "SOLICITAÇÃO MOV.", 
-                        pat_m, 
-                        f"ID {id_mov} ({tipo_mov[:6]}): de '{origem.strip()}' para '{destino.strip()}'. Solicitante: {solicitante.strip()}."
-                    )
-                    st.success("✅ Solicitação registrada com sucesso e sistema atualizado! Encaminhe para conferência no Almoxarifado.")
-            else:
-                st.error("Preencha o Patrimônio e o Solicitante.")
+        if not ativo_info.empty:
+            registro_atual = ativo_info.iloc[0].to_dict()
+            eqp = registro_atual.get('equipamento', '')
+            marca = registro_atual.get('marca', '')
+            modelo = registro_atual.get('modelo', '')
+            serie = registro_atual.get('numero_serie', '')
+            status_atual = registro_atual.get('status_sistema', 'Disponível')
+            cautela_atual = registro_atual.get('cautela', '')
+            
+            st.success(f"✅ **Ativo Localizado:** {eqp} - {marca} {modelo} (Série: {serie})")
+            st.info(f"📍 **Status:** {status_atual} | **Cautela/Local Atual:** {cautela_atual}")
+            
+            with st.form("form_solicitacao"):
+                st.markdown("###### Preencha os detalhes da movimentação:")
+                col1, col2 = st.columns(2)
+                with col1:
+                    opcoes_mov = [
+                        "MOV-01 | Almoxarifado -> Colaborador", 
+                        "MOV-02 | Colaborador -> Almoxarifado", 
+                        "MOV-03 | Unidade -> Unidade", 
+                        "MOV-04 | Almoxarifado -> Laboratório",
+                        "MOV-05 | Laboratório -> Almoxarifado"
+                    ]
+                    tipo_mov = st.selectbox("Tipo de Movimentação", opcoes_mov)
+                    solicitante = st.text_input("Nome do Solicitante (Matrícula)", value=st.session_state.nome_real)
+                with col2:
+                    # Auto-preenche a origem com a cautela atual da base
+                    origem = st.text_input("Unidade/Equipe de Origem", value=str(cautela_atual))
+                    destino = st.text_input("Unidade/Equipe de Destino")
+                    motivo = st.text_area("Motivo da Movimentação")
+                
+                if st.form_submit_button("🚀 Registrar Solicitação", type="primary"):
+                    if solicitante.strip() and destino.strip():
+                        id_mov = f"MOV-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                        nova_mov = pd.DataFrame([{
+                            'id_mov': id_mov, 
+                            'data_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
+                            'tipo_mov': tipo_mov[:6], 
+                            'patrimonio': pat_busca_limpo, 
+                            'origem': origem.strip(), 
+                            'destino': destino.strip(), 
+                            'solicitante': solicitante.strip(), 
+                            'autorizador': 'Pendente', 
+                            'status_mov': 'Aguardando Conferência'
+                        }])
+                        if salvar_dados(df_m=nova_mov):
+                            registrar_log_auditoria(
+                                "SOLICITAÇÃO MOV.", 
+                                pat_busca_limpo, 
+                                f"ID {id_mov} ({tipo_mov[:6]}): de '{origem.strip()}' para '{destino.strip()}'. Solicitante: {solicitante.strip()}."
+                            )
+                            st.success("✅ Solicitação registrada com sucesso e sistema atualizado! Encaminhe para conferência no Almoxarifado.")
+                    else:
+                        st.error("Preencha o Destino e o Solicitante.")
+        else:
+            st.warning("⚠️ Patrimônio não localizado na base mestra. Verifique o número digitado ou cadastre-o primeiro no Painel de Gestão.")
 
 # ==========================================
 # MÓDULO 3: ALMOXARIFADO CENTRAL
@@ -775,7 +792,6 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
         opcao_termo = st.radio("Ação:", ["Emitir Novo Termo", "Encerrar Termo (Devolução)"], horizontal=True)
         if opcao_termo == "Emitir Novo Termo":
             
-            # --- BUSCA INTELIGENTE DE COLABORADOR ---
             st.markdown("###### 🔍 Auto-Preenchimento de Colaborador")
             matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados:")
             
