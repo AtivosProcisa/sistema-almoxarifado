@@ -43,7 +43,12 @@ if not supabase:
 # ==========================================
 # FUNÇÕES UTILITÁRIAS E DE HIGIENIZAÇÃO
 # ==========================================
-COLUNAS_ATIVOS = ['codigo_d365', 'patrimonio_placa', 'numero_serie', 'marca', 'modelo', 'categoria', 'status_sistema', 'condicao_fisica', 'localizacao_atual', 'responsavel_atual', 'data_ultima_mov', 'observacoes']
+# Novas colunas baseadas no padrão V1.2
+COLUNAS_ATIVOS = [
+    'item', 'valor', 'equipamento', 'marca', 'modelo', 'numero_serie', 
+    'patrimonio', 'cautela', 'projeto', 'coordenacao', 'nf_procisa', 
+    'atualizado_em', 'condicoes_para_uso', 'acessorios', 'status_sistema'
+]
 COLUNAS_MOV = ['id_mov', 'data_hora', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante', 'autorizador', 'status_mov']
 COLUNAS_TERMOS = ['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao', 'data_baixa', 'status_termo']
 COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_divergencia', 'status_resolucao', 'analista_responsavel', 'observacoes']
@@ -60,12 +65,15 @@ def exibir_marca_desenvolvedor():
     st.markdown(ASSINATURA_DEV_HTML, unsafe_allow_html=True)
 
 def normalizar_nome_coluna(col):
+    """Remove qualquer acento, espaços e ajusta abreviações como Nº."""
     texto = str(col).strip().lower()
+    # Tratamento especial para o 'Nº SÉRIE' virar 'numero_serie'
+    texto = texto.replace('nº', 'numero').replace('º', '').replace('ª', '')
     texto_sem_acento = ''.join(
         c for c in unicodedata.normalize('NFD', texto)
         if unicodedata.category(c) != 'Mn'
     )
-    return texto_sem_acento.replace(' ', '_')
+    return texto_sem_acento.replace(' ', '_').replace('-', '_')
 
 def preparar_para_supabase(df, colunas_validas):
     if df.empty:
@@ -152,9 +160,11 @@ def carregar_dados():
         
         for col in COLUNAS_ATIVOS:
             if col not in df_ativos.columns:
-                df_ativos[col] = ""
+                # Se não existir status_sistema (pq o Excel novo não tem), assume como Disponível
+                df_ativos[col] = "Disponível" if col == 'status_sistema' else ""
+                
         if not df_ativos.empty:
-            df_ativos['patrimonio_placa'] = df_ativos['patrimonio_placa'].astype(str).str.strip()
+            df_ativos['patrimonio'] = df_ativos['patrimonio'].astype(str).str.strip()
 
         if not df_diverg_bruto.empty and 'tipo_divergencia' in df_diverg_bruto.columns:
             df_diverg_bruto['status_resolucao'] = df_diverg_bruto['status_resolucao'].fillna('Pendente').replace("", "Pendente")
@@ -343,10 +353,11 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
     pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
     
+    # Adptado para as novas colunas
     marca = str(info_ativo.iloc[0].get('marca', ''))
     modelo = str(info_ativo.iloc[0].get('modelo', ''))
     serie = str(info_ativo.iloc[0].get('numero_serie', ''))
-    condicao = str(info_ativo.iloc[0].get('condicao_fisica', ''))
+    condicao = str(info_ativo.iloc[0].get('condicoes_para_uso', ''))
     
     pdf.ln(5)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"1. MARCA/MODELO: {marca} {modelo}"), ln=True)
@@ -478,19 +489,21 @@ if selecao_perfil and selecao_perfil.startswith("1"):
             colA, colB, colC = st.columns(3)
             with colA:
                 cad_patrimonio = st.text_input("Patrimônio / Placa *")
-                cad_codigo = st.text_input("Código D365")
-                cad_serie = st.text_input("Número de Série")
-            with colB:
+                cad_equipamento = st.text_input("Equipamento")
                 cad_marca = st.text_input("Marca")
                 cad_modelo = st.text_input("Modelo")
-                cad_categoria = st.selectbox("Categoria", ["OTDR", "Máquina de Fusão", "Ferramenta", "Veículo", "Informática", "Outros"])
+                cad_serie = st.text_input("Número de Série")
+            with colB:
+                cad_item = st.text_input("Item")
+                cad_valor = st.text_input("Valor")
+                cad_cautela = st.text_input("Cautela (Local/Responsável)")
+                cad_projeto = st.text_input("Projeto")
+                cad_coord = st.text_input("Coordenação")
             with colC:
-                cad_status = st.selectbox("Status", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
-                cad_condicao = st.selectbox("Condição Física", ["Novo", "Bom", "Regular", "Ruim", "Inservível"])
-                cad_loc = st.text_input("Localização Atual", value="Almoxarifado Central")
-            
-            cad_resp = st.text_input("Responsável Atual", value="Almoxarifado")
-            cad_obs = st.text_area("Observações")
+                cad_nf = st.text_input("NF Procisa")
+                cad_condicao = st.text_input("Condições para Uso")
+                cad_acessorios = st.text_input("Acessórios")
+                cad_status = st.selectbox("Status no Sistema", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
             
             submit_cadastro = st.form_submit_button("💾 Salvar Ativo na Nuvem", type="primary")
             
@@ -498,21 +511,24 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                 if cad_patrimonio.strip():
                     pat_limpo = cad_patrimonio.strip()
                     qtd_antes = len(df_ativos)
-                    ja_existia = (not df_ativos.empty) and (pat_limpo in df_ativos['patrimonio_placa'].astype(str).values)
+                    ja_existia = (not df_ativos.empty) and (pat_limpo in df_ativos['patrimonio'].astype(str).values)
                     
                     novo_ativo = pd.DataFrame([{
-                        'codigo_d365': cad_codigo.strip(),
-                        'patrimonio_placa': pat_limpo,
-                        'numero_serie': cad_serie.strip(),
+                        'item': cad_item.strip(),
+                        'valor': cad_valor.strip(),
+                        'equipamento': cad_equipamento.strip(),
                         'marca': cad_marca.strip(),
                         'modelo': cad_modelo.strip(),
-                        'categoria': cad_categoria,
-                        'status_sistema': cad_status,
-                        'condicao_fisica': cad_condicao,
-                        'localizacao_atual': cad_loc.strip(),
-                        'responsavel_atual': cad_resp.strip(),
-                        'data_ultima_mov': datetime.now().strftime('%Y-%m-%d'),
-                        'observacoes': cad_obs.strip()
+                        'numero_serie': cad_serie.strip(),
+                        'patrimonio': pat_limpo,
+                        'cautela': cad_cautela.strip(),
+                        'projeto': cad_projeto.strip(),
+                        'coordenacao': cad_coord.strip(),
+                        'nf_procisa': cad_nf.strip(),
+                        'atualizado_em': datetime.now().strftime('%Y-%m-%d'),
+                        'condicoes_para_uso': cad_condicao.strip(),
+                        'acessorios': cad_acessorios.strip(),
+                        'status_sistema': cad_status
                     }])
                     if salvar_dados(df_a=novo_ativo):
                         qtd_depois = qtd_antes if ja_existia else qtd_antes + 1
@@ -530,7 +546,7 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                         }
                         st.rerun()
                 else:
-                    st.error("O campo 'Patrimônio / Placa' é obrigatório.")
+                    st.error("O campo 'Patrimônio' é obrigatório.")
 
     with aba_io:
         st.subheader("Exportar Relatórios (Download)")
@@ -563,16 +579,20 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                 df_up = pd.read_excel(arquivo_up)
                 df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
                 
-                if 'patrimonio_placa' not in df_up.columns:
-                    st.error(f"A coluna obrigatória 'patrimonio_placa' não foi encontrada na planilha. Colunas lidas: {list(df_up.columns)}")
+                # Se o excel nao tem a coluna status_sistema, criamos para não partir os indicadores
+                if 'status_sistema' not in df_up.columns:
+                    df_up['status_sistema'] = 'Disponível'
+                
+                if 'patrimonio' not in df_up.columns:
+                    st.error(f"A coluna obrigatória 'patrimonio' não foi encontrada na planilha. Colunas lidas: {list(df_up.columns)}")
                 else:
-                    df_up = df_up.dropna(subset=['patrimonio_placa'])
-                    df_up['patrimonio_placa'] = df_up['patrimonio_placa'].astype(str).str.strip()
-                    df_up = df_up[df_up['patrimonio_placa'] != '']
-                    df_up = df_up.drop_duplicates(subset=['patrimonio_placa'], keep='last')
+                    df_up = df_up.dropna(subset=['patrimonio'])
+                    df_up['patrimonio'] = df_up['patrimonio'].astype(str).str.strip()
+                    df_up = df_up[df_up['patrimonio'] != '']
+                    df_up = df_up.drop_duplicates(subset=['patrimonio'], keep='last')
                     
-                    atuais_set = set(df_ativos['patrimonio_placa'].astype(str).str.strip()) if not df_ativos.empty else set()
-                    novos_set = set(df_up['patrimonio_placa'])
+                    atuais_set = set(df_ativos['patrimonio'].astype(str).str.strip()) if not df_ativos.empty else set()
+                    novos_set = set(df_up['patrimonio'])
                     
                     qtd_antes = len(atuais_set)
                     qtd_novos = len(novos_set - atuais_set)
@@ -700,40 +720,36 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
         patrimonio_busca = st.text_input("Bipar/Digitar Patrimônio:")
         if patrimonio_busca:
             pat_busca_limpo = patrimonio_busca.strip()
-            ativo_info = df_ativos[df_ativos['patrimonio_placa'].astype(str) == pat_busca_limpo] if not df_ativos.empty else pd.DataFrame()
+            ativo_info = df_ativos[df_ativos['patrimonio'].astype(str) == pat_busca_limpo] if not df_ativos.empty else pd.DataFrame()
             
             if not ativo_info.empty:
                 registro_atual = ativo_info.iloc[0].to_dict()
-                status_antigo = registro_atual.get('status_sistema', '')
-                resp_antigo = registro_atual.get('responsavel_atual', '')
-                loc_antiga = registro_atual.get('localizacao_atual', '')
+                status_antigo = registro_atual.get('status_sistema', 'Disponível')
+                cautela_antiga = registro_atual.get('cautela', '')
                 
                 st.info(f"**Ativo Localizado:** {registro_atual.get('marca', '')} {registro_atual.get('modelo', '')} | **Status Atual:** {status_antigo}")
                 
-                colA, colB, colC = st.columns(3)
+                colA, colB = st.columns(2)
                 with colA: 
                     novo_status = st.selectbox("Novo Status:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito"])
                 with colB: 
-                    novo_resp = st.text_input("Novo Responsável", value=str(resp_antigo if resp_antigo else 'Almoxarifado'))
-                with colC: 
-                    nova_loc = st.text_input("Nova Localização", value=str(loc_antiga if loc_antiga else 'Almoxarifado Central'))
+                    nova_cautela = st.text_input("Nova Cautela (Responsável/Local)", value=str(cautela_antiga if cautela_antiga else 'Almoxarifado'))
                 
-                d365_ok = st.checkbox("Status e Localização conferem no D365?")
+                d365_ok = st.checkbox("Status e Localização conferem no sistema central?")
                 eponto_ok = st.checkbox("Movimentação validada no e-Ponto?")
                 fisico_ok = st.checkbox("Estado físico, Série e Acessórios conferem?")
                 
                 if st.button("Validar e Concluir Movimentação", type="primary"):
                     if d365_ok and eponto_ok and fisico_ok:
                         registro_atual['status_sistema'] = novo_status
-                        registro_atual['responsavel_atual'] = novo_resp.strip()
-                        registro_atual['localizacao_atual'] = nova_loc.strip()
-                        registro_atual['data_ultima_mov'] = datetime.now().strftime('%Y-%m-%d')
+                        registro_atual['cautela'] = nova_cautela.strip()
+                        registro_atual['atualizado_em'] = datetime.now().strftime('%Y-%m-%d')
                         
                         if salvar_dados(df_a=pd.DataFrame([registro_atual])):
                             registrar_log_auditoria(
                                 "CONFERÊNCIA ALMOX.", 
                                 pat_busca_limpo, 
-                                f"Status: '{status_antigo}' -> '{novo_status}' | Resp: '{resp_antigo}' -> '{novo_resp.strip()}' | Loc: '{loc_antiga}' -> '{nova_loc.strip()}'."
+                                f"Status: '{status_antigo}' -> '{novo_status}' | Cautela: '{cautela_antiga}' -> '{nova_cautela.strip()}'."
                             )
                             st.success("✅ Movimentação concluída e atualizada na nuvem!")
                             st.rerun()
@@ -787,7 +803,7 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                 
             if submit_termo and patrimonio_termo.strip():
                 pat_termo_limpo = patrimonio_termo.strip()
-                ativo_info_termo = df_ativos[df_ativos['patrimonio_placa'].astype(str) == pat_termo_limpo] if not df_ativos.empty else pd.DataFrame()
+                ativo_info_termo = df_ativos[df_ativos['patrimonio'].astype(str) == pat_termo_limpo] if not df_ativos.empty else pd.DataFrame()
                 if not ativo_info_termo.empty:
                     caminho_pdf = gerar_termo_pdf(
                         pat_termo_limpo, responsavel_termo.strip(), matricula_termo.strip(), 
@@ -875,16 +891,16 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
     if st.button("Atualizar Base", type="primary"):
         if patrimonio_lab.strip():
             pat_lab_limpo = patrimonio_lab.strip()
-            ativo_match = df_ativos[df_ativos['patrimonio_placa'].astype(str) == pat_lab_limpo] if not df_ativos.empty else pd.DataFrame()
+            ativo_match = df_ativos[df_ativos['patrimonio'].astype(str) == pat_lab_limpo] if not df_ativos.empty else pd.DataFrame()
             if not ativo_match.empty:
                 ativo_lab = ativo_match.iloc[0].to_dict()
-                cond_antiga = ativo_lab.get('condicao_fisica', '')
-                ativo_lab['condicao_fisica'] = resultado
+                cond_antiga = ativo_lab.get('condicoes_para_uso', '')
+                ativo_lab['condicoes_para_uso'] = resultado
                 if "INSERVÍVEL" in resultado or "REPROVADO" in resultado:
                     ativo_lab['status_sistema'] = 'Baixado'
                 else:
                     ativo_lab['status_sistema'] = 'Disponível'
-                ativo_lab['data_ultima_mov'] = datetime.now().strftime('%Y-%m-%d')
+                ativo_lab['atualizado_em'] = datetime.now().strftime('%Y-%m-%d')
                 
                 if salvar_dados(df_a=pd.DataFrame([ativo_lab])):
                     registrar_log_auditoria(
