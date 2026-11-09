@@ -264,46 +264,123 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==========================================
-# FUNÇÃO GERADORA DE PDF
+# FUNÇÃO GERADORA DE PDF (MODELO PROCISA FR-RH-P-026)
 # ==========================================
 def limpar_texto_pdf(texto):
     return str(texto).encode('latin-1', 'replace').decode('latin-1')
 
 def gerar_termo_pdf(patrimonio, responsavel, matricula, unidade, info_ativo):
     pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTO"), ln=True, align='C')
-    pdf.ln(5)
-    pdf.set_font("Arial", '', 11)
+    
     data_atual = datetime.now().strftime("%d/%m/%Y")
+    
+    # Cabeçalho
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(40, 10, txt=limpar_texto_pdf("PROCISA"), border=1, align='C')
+    pdf.cell(90, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
+    
+    # Segunda linha do cabeçalho
+    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border=1, align='C')
+    pdf.cell(90, 5, txt=limpar_texto_pdf("REF."), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("- 1 -"), border=1, ln=True, align='C')
+    
+    pdf.ln(5)
+    
+    # Título Principal
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), ln=True, align='C')
+    
+    # Dados do Usuário
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"Usuário: {responsavel}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"RG: _________________  CPF/MF: _________________  Matrícula: {matricula}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"Área: {unidade}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("Projeto: _________________"), ln=True)
+    
+    pdf.ln(5)
+    
+    # Cláusulas (Página 1)
+    pdf.set_font("Arial", '', 9)
+    clausulas = [
+        "1. O usuário infra-assinado recebe da PROCISA, nesta data, a expressa concessão do uso do(s) equipamento(s), conforme o estado descrito abaixo, com o objetivo de complementar suas ferramentas profissionais, no estrito exercício de sua função na PROCISA, desde que devidamente aprovado pelo seu Superior ou Responsável, que passa a ter a responsabilidade solidária por todos os atos decorrentes dessa concessão do uso do(s) equipamento(s).",
+        "2. Neste ato, compromete-se que, enquanto estiver em sua guarda, fará bom uso do(s) equipamento(s) e mantê-lo(s)-á sempre em bom estado de conservação, tratando-o com o mesmo cuidado e diligência que costuma tratar com aquilo que lhe pertence, observando-se as recomendações da Área de Logística/Patrimonial e do Manual de Instruções do(s) Equipamento(s), disponibilizando-os para manutenções corretivas ou preventivas quando assim solicitado.",
+        "3. Ademais, compromete-se a não emprestar, vender, onerar o(s) equipamento(s) ou de qualquer outra forma ceder o uso do(s) equipamento(s) a terceiros, sem a expressa concordância por escrito da PROCISA, devendo devolvê-lo(s) na sua integralidade, com todos os eventuais acessórios que lhe(s) compõem, quando assim for solicitado, pelo Almoxarifado ou pelo seu superior imediato, ou no momento de seu desligamento, de suas férias ou em licenças médicas, sob pena de lhe incorrer as penalidades legalmente previstas. Todos os atos ocorridos no período de uso do usuário serão de sua exclusiva responsabilidade, mesmo que verificados após a sua devolução.",
+        "4. Havendo a expressa autorização, por escrito, do superior imediato do usuário, o(s) equipamento(s) poderá(ão) ser cedido(s) a terceiro, desde que o terceiro seja funcionário da PROCISA, que só poderá ocorrer mediante comunicação expressa à Área de Logística/Patrimonial e se assim forem seguidos os devidos procedimentos formais. A transferência só será efetivada com assinatura de novo Termo de Responsabilidade de Equipamentos pelo terceiro.",
+        "5. Em casos de furto, roubo, perda ou extravio, parcial ou total, o usuário deverá apresentar de imediato à Área de Logística/Patrimonial o respectivo Boletim de Ocorrência. No entanto, o usuário está ciente de que é sua inteira responsabilidade a falsa notícia de perda, de furto ou de roubo, assim como a má utilização do(s) equipamento(s), e que arcará com seus respectivos custos, concordando ainda, neste ato, com o desconto em folha de pagamento, nos limites estabelecidos em lei, ou a realizar outra forma de acordo, sem prejuízo da apuração das perdas e dos danos incorridos à PROCISA que, desde já, se compromete a ressarci-la, bem como está ciente de que poderá responder pessoalmente pelas eventuais consequências administrativas e/ou judiciais, inclusive de natureza penal.",
+        "6. Por fim, está ciente de que o descumprimento de quaisquer das disposições aqui estabelecidas acarretará nas sanções legalmente previstas."
+    ]
+    
+    for clausula in clausulas:
+        pdf.multi_cell(0, 5, txt=limpar_texto_pdf(clausula))
+        pdf.ln(3)
+        
+    pdf.ln(10)
+    pdf.cell(90, 10, txt="___________________________________", align='C')
+    pdf.cell(90, 10, txt="___________________________________", ln=True, align='C')
+    pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
+    pdf.cell(90, 5, txt=limpar_texto_pdf("COORDENADOR/RESPONSÁVEL"), ln=True, align='C')
+    
+    # --- PÁGINA 2 ---
+    pdf.add_page()
+    
+    # Cabeçalho da Página 2
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(40, 10, txt=limpar_texto_pdf("PROCISA"), border=1, align='C')
+    pdf.cell(90, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
+    
+    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border=1, align='C')
+    pdf.cell(90, 5, txt=limpar_texto_pdf("REF."), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
+    pdf.cell(30, 5, txt=limpar_texto_pdf("- 2 -"), border=1, ln=True, align='C')
+    
+    pdf.ln(5)
+    
+    # Detalhes do Equipamento e Datas
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
+    pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
     
     marca = str(info_ativo.iloc[0].get('marca', ''))
     modelo = str(info_ativo.iloc[0].get('modelo', ''))
     serie = str(info_ativo.iloc[0].get('numero_serie', ''))
+    condicao = str(info_ativo.iloc[0].get('condicao_fisica', ''))
     
-    linhas = [
-        f"Pelo presente termo, o colaborador {responsavel}, matrícula {matricula},",
-        f"lotado na unidade {unidade}, declara ter recebido o equipamento abaixo",
-        "descrito em perfeitas condições de uso, assumindo o compromisso de zelar",
-        "pela sua guarda e conservação.",
-        "",
-        "DETALHES DO EQUIPAMENTO:",
-        f"- Patrimônio: {patrimonio}",
-        f"- Marca / Modelo: {marca} {modelo}",
-        f"- Número de Série: {serie}",
-        f"- Data de Emissão: {data_atual}",
-        ""
-    ]
-    texto = "\n".join(linhas)
+    pdf.ln(5)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"1. MARCA/MODELO: {marca} {modelo}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE ATIVO: {patrimonio}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO: {condicao}"), ln=True)
+    pdf.ln(5)
     
-    pdf.multi_cell(0, 8, txt=limpar_texto_pdf(texto))
-    pdf.ln(20)
+    # Linhas extras para preenchimento manual de outros equipamentos se necessário
+    for i in range(2, 6):
+        pdf.cell(0, 6, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
+        pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: _______________________________________"), ln=True)
+        pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE ATIVO: _______________________________________"), ln=True)
+        pdf.cell(0, 6, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
+        pdf.ln(3)
+        
+    pdf.ln(5)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("MOTIVO DA DEVOLUÇÃO:"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("[  ] MANUTENÇÃO   [  ] DESLIGAMENTO   [  ] CALIBRAÇÃO"), ln=True)
+    
+    pdf.ln(5)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("OBSERVAÇÕES: __________________________________________________________________________"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("COORD. RESPONSÁVEL: ______________________  NÚMERO DA NF: ______________________"), ln=True)
+    
+    pdf.ln(15)
     pdf.cell(90, 10, txt="___________________________________", align='C')
     pdf.cell(90, 10, txt="___________________________________", ln=True, align='C')
-    pdf.cell(90, 10, txt=limpar_texto_pdf("Assinatura do Colaborador"), align='C')
-    pdf.cell(90, 10, txt=limpar_texto_pdf("Assinatura do Almoxarifado"), ln=True, align='C')
-    
+    pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
+    pdf.cell(90, 5, txt=limpar_texto_pdf("ALMOXARIFADO"), ln=True, align='C')
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
         return tmp.name
@@ -693,9 +770,9 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                         )
                         st.success("✅ Termo registrado e sistema atualizado! Clique abaixo para baixar o PDF.")
                         st.download_button(
-                            label="📥 Baixar Termo PDF", 
+                            label="📥 Baixar Termo PDF (PROCISA FR-RH-P-026)", 
                             data=PDFbyte, 
-                            file_name=f"Termo_{pat_termo_limpo}.pdf", 
+                            file_name=f"Termo_PROCISA_{pat_termo_limpo}.pdf", 
                             mime='application/pdf'
                         )
                 else:
