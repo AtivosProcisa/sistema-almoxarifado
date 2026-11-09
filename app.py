@@ -211,7 +211,7 @@ def salvar_dados_massa(tabela, df_massa, colunas):
         return False
 
 # ==========================================
-# SISTEMA DE AUTENTICAÇÃO
+# SISTEMA DE AUTENTICAÇÃO E VARIÁVEIS GLOBAIS
 # ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -219,6 +219,8 @@ if 'logged_in' not in st.session_state:
     st.session_state.perfil = None
     st.session_state.nome_real = None
     st.session_state.modulo_ativo = None
+    st.session_state.pdf_termo_pronto = None
+    st.session_state.msg_sucesso = None
 
 def fazer_login(usuario, senha):
     if df_usuarios.empty:
@@ -244,6 +246,8 @@ def fazer_logout():
     st.session_state.perfil = None
     st.session_state.nome_real = None
     st.session_state.modulo_ativo = None
+    st.session_state.pdf_termo_pronto = None
+    st.session_state.msg_sucesso = None
     st.rerun()
 
 # --- TELA DE LOGIN ---
@@ -473,7 +477,7 @@ if selecao_perfil and selecao_perfil.startswith("1"):
 
     abas_dashboard = ["Inventário Geral", "Histórico de Movimentações", "Termos Emitidos", "➕ Novo Cadastro Manual", "🔄 Importar / Exportar"]
     if st.session_state.perfil == 'Master':
-        abas_dashboard.append("❌ Excluir Ativo")
+        abas_dashboard.append("❌ Excluir Ativo (Master)")
         
     abas = st.tabs(abas_dashboard)
     
@@ -757,7 +761,7 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
             with c4:
                 nf_edit = st.text_input("Nota Fiscal / NF Procisa", value=nf_atual)
             with c5:
-                data_mov = st.date_input("Data da Movimentação", datetime.today())
+                data_mov = st.date_input("Data da Movimentação (Efetiva)", datetime.today())
             
             if st.form_submit_button("🚀 Registrar Solicitação", type="primary"):
                 if destino.strip():
@@ -798,81 +802,186 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("3"):
     st.header("✅ Central de Validações (Almoxarifado)")
-    st.write("Bipe o equipamento para concluir o ciclo de movimentação e atualizar o Dashboard em tempo real.")
     
-    patrimonio_busca = st.text_input("🔍 Bipar/Digitar Patrimônio ou Série:")
+    # Tratamento de Alertas de Sucesso e Termos Automáticos gerados
+    if st.session_state.pdf_termo_pronto:
+        st.success("✅ Validação concluída! O Termo de Responsabilidade foi gerado automaticamente com os dados do Colaborador.")
+        st.download_button(
+            label="📥 Baixar Termo PDF (Auto-Gerado)", 
+            data=st.session_state.pdf_termo_pronto['bytes'], 
+            file_name=st.session_state.pdf_termo_pronto['nome_arquivo'], 
+            mime='application/pdf',
+            type="primary"
+        )
+        if st.button("✖️ Fechar Aviso"):
+            st.session_state.pdf_termo_pronto = None
+            st.rerun()
+        st.divider()
+    elif st.session_state.msg_sucesso:
+        st.success(st.session_state.msg_sucesso)
+        if st.button("✖️ Fechar Aviso"):
+            st.session_state.msg_sucesso = None
+            st.rerun()
+        st.divider()
     
-    if patrimonio_busca:
-        ativo_info = buscar_ativo(patrimonio_busca, df_ativos)
+    st.markdown("###### 📋 Fila Automática de Movimentações (Aguardando Conferência)")
+    movs_pendentes = df_mov[df_mov['status_mov'] == 'Aguardando Conferência'] if not df_mov.empty else pd.DataFrame()
+    
+    if movs_pendentes.empty:
+        st.success("🎉 Excelente! Nenhuma solicitação pendente no momento.")
+    else:
+        st.dataframe(movs_pendentes[['id_mov', 'data_hora', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante', 'matricula_solicitante', 'projeto', 'data_efetiva']], use_container_width=True)
         
-        if not ativo_info.empty:
-            registro_atual = ativo_info.iloc[0].to_dict()
-            pat_real = registro_atual.get('patrimonio', '')
-            status_antigo = registro_atual.get('status_sistema', 'Disponível')
-            cautela_antiga = registro_atual.get('cautela', '')
+        id_selecionado = st.selectbox("Selecione o ID da Movimentação para Validar:", movs_pendentes['id_mov'].tolist())
+        
+        if id_selecionado:
+            mov_atual = movs_pendentes[movs_pendentes['id_mov'] == id_selecionado].iloc[0].to_dict()
+            pat_real = mov_atual.get('patrimonio', '')
+            ativo_info = buscar_ativo(pat_real, df_ativos)
             
-            st.info(f"**Ativo Localizado:** {registro_atual.get('marca', '')} {registro_atual.get('modelo', '')} (Série: {registro_atual.get('numero_serie', '')}) | **Status Atual:** {status_antigo}")
-            
-            movs_pendentes = df_mov[(df_mov['patrimonio'] == pat_real) & (df_mov['status_mov'] == 'Aguardando Conferência')] if not df_mov.empty else pd.DataFrame()
-            
-            id_mov_pendente = None
-            if not movs_pendentes.empty:
-                mov_atual = movs_pendentes.iloc[0].to_dict()
-                id_mov_pendente = mov_atual.get('id_mov')
-                st.warning(f"📢 **Solicitação Encontrada!**\nDe: {mov_atual.get('origem')} -> Para: {mov_atual.get('destino')} | Projeto: {mov_atual.get('projeto')} | Data Solicitada: {mov_atual.get('data_efetiva')}")
+            if not ativo_info.empty:
+                registro_atual = ativo_info.iloc[0].to_dict()
+                status_antigo = registro_atual.get('status_sistema', 'Disponível')
+                cautela_antiga = registro_atual.get('cautela', '')
                 
-                colA, colB = st.columns(2)
-                with colA: 
-                    novo_status = st.selectbox("Novo Status no Sistema:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito"], index=0 if 'Almoxarifado' in mov_atual.get('destino', '') else 1)
-                with colB: 
-                    nova_cautela = st.text_input("Atualizar Cautela (Destino Real)", value=str(mov_atual.get('destino', '')))
+                st.info(f"**Ativo Vinculado:** {registro_atual.get('marca', '')} {registro_atual.get('modelo', '')} (Série: {registro_atual.get('numero_serie', '')}) | **Status Atual:** {status_antigo}")
                 
-                d365_ok = st.checkbox("Status e Localização conferem no sistema central?")
-                eponto_ok = st.checkbox("Movimentação validada no e-Ponto?")
-                fisico_ok = st.checkbox("Estado físico, Série e Acessórios conferem?")
+                with st.form("form_validacao_pendente"):
+                    colA, colB = st.columns(2)
+                    with colA: 
+                        novo_status = st.selectbox("Novo Status no Sistema:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"], index=0 if 'Almoxarifado' in mov_atual.get('destino', '') else 1)
+                    with colB: 
+                        nova_cautela = st.text_input("Atualizar Cautela (Destino Real)", value=str(mov_atual.get('destino', '')))
+                    
+                    st.write("Verificações de Segurança:")
+                    d365_ok = st.checkbox("Status e Localização conferem no sistema central?")
+                    eponto_ok = st.checkbox("Movimentação validada no e-Ponto?")
+                    fisico_ok = st.checkbox("Estado físico, Série e Acessórios conferem?")
+                    
+                    btn_validar = st.form_submit_button("✅ Validar e Concluir Transferência", type="primary")
+                    
+                    if btn_validar:
+                        if d365_ok and eponto_ok and fisico_ok:
+                            try:
+                                # 1. Atualiza Ativo
+                                dados_update_ativo = {
+                                    'status_sistema': novo_status,
+                                    'cautela': nova_cautela.strip(),
+                                    'projeto': str(mov_atual.get('projeto', '')).strip(),
+                                    'coordenacao': str(mov_atual.get('coordenacao', '')).strip(),
+                                    'nf_procisa': str(mov_atual.get('nf_procisa', '')).strip(),
+                                    'atualizado_em': str(mov_atual.get('data_efetiva', datetime.now().strftime('%Y-%m-%d'))).strip()
+                                }
+                                supabase.table('ativos_master').update(dados_update_ativo).eq('patrimonio', pat_real).execute()
+                                
+                                # 2. Atualiza Movimentação
+                                dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
+                                supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_selecionado).execute()
+                                
+                                # 3. Se for MOV-01 (Almoxarifado -> Colaborador), Gera o Termo Automaticamente
+                                if str(mov_atual.get('tipo_mov', '')).startswith("MOV-01"):
+                                    mat_solic = str(mov_atual.get('matricula_solicitante', '')).strip()
+                                    match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_solic] if not df_empregados.empty else pd.DataFrame()
+                                    emp = match_emp.iloc[0].fillna("").to_dict() if not match_emp.empty else {}
+                                    
+                                    resp_nome = emp.get('nome', mov_atual.get('destino', ''))
+                                    resp_cpf = emp.get('cpf', '')
+                                    resp_rg = emp.get('rg', '')
+                                    resp_proj = emp.get('projeto', mov_atual.get('projeto', ''))
+                                    resp_unid = emp.get('unidade', mov_atual.get('coordenacao', ''))
+                                    
+                                    caminho_pdf = gerar_termo_pdf(
+                                        patrimonio=pat_real,
+                                        responsavel=resp_nome,
+                                        matricula=mat_solic,
+                                        cpf=resp_cpf,
+                                        rg=resp_rg,
+                                        projeto=resp_proj,
+                                        unidade=resp_unid,
+                                        info_ativo=pd.DataFrame([registro_atual])
+                                    )
+                                    
+                                    with open(caminho_pdf, "rb") as pdf_file: 
+                                        PDFbyte = pdf_file.read()
+                                    
+                                    id_termo = f"TRM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                    novo_termo = {
+                                        'id_termo': id_termo, 
+                                        'patrimonio': pat_real, 
+                                        'responsavel': resp_nome, 
+                                        'matricula': mat_solic, 
+                                        'unidade': resp_unid, 
+                                        'data_emissao': datetime.now().strftime('%Y-%m-%d'), 
+                                        'data_baixa': '', 
+                                        'status_termo': 'Ativo'
+                                    }
+                                    supabase.table('termos').insert(novo_termo).execute()
+                                    registrar_log_auditoria("EMISSÃO DE TERMO (AUTO)", pat_real, f"Termo {id_termo} gerado na validação para {resp_nome}.")
+                                    
+                                    st.session_state.pdf_termo_pronto = {
+                                        'bytes': PDFbyte,
+                                        'nome_arquivo': f"Termo_{pat_real}.pdf"
+                                    }
+                                else:
+                                    st.session_state.msg_sucesso = "✅ Ciclo de movimentação fechado! Dashboard atualizado em tempo real."
+                                
+                                st.cache_data.clear()
+                                registrar_log_auditoria("VALIDAÇÃO CONCLUÍDA", pat_real, f"Mov. {id_selecionado} concluída. Cautela atual: {nova_cautela}.")
+                                st.rerun()
+                                
+                            except Exception as e:
+                                st.error(f"Erro ao concluir movimentação: {e}")
+                        else:
+                            st.error("Complete as 3 caixas de verificação antes de validar.")
+            else:
+                st.warning("⚠️ Patrimônio vinculado não foi localizado na base mestra.")
+
+    st.divider()
+    with st.expander("🛠️ Movimentação Avulsa (Excepcional / Sem solicitação prévia)"):
+        st.info("Utilize esta opção apenas caso o equipamento tenha chegado/saído sem que a equipa tenha aberto uma solicitação no sistema.")
+        pat_avulso = st.text_input("Bipar/Digitar Patrimônio ou Série:")
+        if pat_avulso:
+            ativo_avulso = buscar_ativo(pat_avulso, df_ativos)
+            if not ativo_avulso.empty:
+                reg_avulso = ativo_avulso.iloc[0].to_dict()
+                st.write(f"Ativo: {reg_avulso.get('marca')} {reg_avulso.get('modelo')} | Cautela Atual: {reg_avulso.get('cautela')}")
                 
-                if st.button("✅ Validar e Concluir Transferência", type="primary"):
-                    if d365_ok and eponto_ok and fisico_ok:
+                with st.form("form_avulso"):
+                    cA, cB = st.columns(2)
+                    with cA:
+                        status_av = st.selectbox("Status", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+                    with cB:
+                        cautela_av = st.text_input("Nova Cautela", value=reg_avulso.get('cautela', ''))
+                    
+                    if st.form_submit_button("✅ Forçar Atualização"):
+                        dados_update_av = {
+                            'status_sistema': status_av,
+                            'cautela': cautela_av.strip(),
+                            'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                        }
                         try:
-                            # Atualiza a base Mestra de Ativos em Tempo Real
-                            dados_update_ativo = {
-                                'status_sistema': novo_status,
-                                'cautela': nova_cautela.strip(),
-                                'projeto': mov_atual.get('projeto', '').strip(),
-                                'coordenacao': mov_atual.get('coordenacao', '').strip(),
-                                'nf_procisa': mov_atual.get('nf_procisa', '').strip(),
-                                'atualizado_em': mov_atual.get('data_efetiva', datetime.now().strftime('%Y-%m-%d'))
-                            }
-                            supabase.table('ativos_master').update(dados_update_ativo).eq('patrimonio', pat_real).execute()
-                            
-                            # Encerra o Ciclo da Movimentação
-                            dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
-                            supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_mov_pendente).execute()
-                            
+                            supabase.table('ativos_master').update(dados_update_av).eq('patrimonio', reg_avulso['patrimonio']).execute()
                             st.cache_data.clear()
-                            registrar_log_auditoria("VALIDAÇÃO CONCLUÍDA", pat_real, f"Mov. {id_mov_pendente} concluída. Cautela atual: {nova_cautela}.")
-                            st.success("✅ Ciclo de movimentação fechado! O Dashboard foi atualizado com a nova Cautela, Projeto e NF.")
+                            registrar_log_auditoria("MOVIMENTAÇÃO AVULSA", reg_avulso['patrimonio'], f"Atualizado para {status_av} / {cautela_av}")
+                            st.success("✅ Atualizado com sucesso.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Erro ao concluir movimentação: {e}")
-                    else:
-                        st.error("Complete as 3 caixas de verificação (checkboxes) antes de validar.")
+                            st.error(f"Erro: {e}")
             else:
-                st.info("ℹ️ Nenhuma solicitação em aberto para este ativo. Vá ao menu Solicitações para iniciar o fluxo.")
-        else:
-            st.warning("⚠️ Patrimônio ou Série não localizado na base mestra.")
+                st.warning("Não encontrado.")
 
 # ==========================================
 # MÓDULO 4: GESTÃO DE TERMOS E DIVERGÊNCIAS
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("4"):
     st.header("📄 Gestão de Termos e Divergências")
-    aba_termos, aba_diverg = st.tabs(["Emissão e Baixa de Termos", "Tratar Divergências"])
+    aba_termos, aba_diverg = st.tabs(["Emissão e Baixa de Termos Avulsos", "Tratar Divergências"])
     
     with aba_termos:
-        opcao_termo = st.radio("Ação:", ["Emitir Novo Termo", "Encerrar Termo (Devolução)"], horizontal=True)
-        if opcao_termo == "Emitir Novo Termo":
-            
+        st.info("Nota: Transferências do Almoxarifado para Colaboradores (MOV-01) geram o termo automaticamente no ato da Validação. Utilize esta aba apenas para baixas (Devolução) ou emissões excecionais.")
+        opcao_termo = st.radio("Ação:", ["Encerrar Termo (Devolução)", "Emitir Novo Termo Excepcional"], horizontal=True)
+        
+        if opcao_termo == "Emitir Novo Termo Excepcional":
             st.markdown("###### 🔍 Auto-Preenchimento de Colaborador")
             matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados:")
             
@@ -885,7 +994,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                 else:
                     st.warning("⚠️ Matrícula não encontrada na base. Preencha os campos abaixo manualmente.")
             
-            with st.form("form_termo"):
+            with st.form("form_termo_avulso"):
                 st.markdown("###### 📝 Detalhes do Documento")
                 colA, colB = st.columns(2)
                 with colA:
@@ -927,9 +1036,9 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                         supabase.table('termos').insert(novo_termo).execute()
                         st.cache_data.clear()
                         registrar_log_auditoria(
-                            "EMISSÃO DE TERMO", 
+                            "EMISSÃO DE TERMO (AVULSO)", 
                             pat_real, 
-                            f"Termo {id_termo} emitido para {responsavel_termo.strip()} (Mat: {matricula_termo.strip()})."
+                            f"Termo {id_termo} emitido manualmente para {responsavel_termo.strip()}."
                         )
                         st.success("✅ Termo registrado na nuvem! Clique abaixo para baixar o PDF.")
                         st.download_button(
