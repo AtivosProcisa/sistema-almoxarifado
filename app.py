@@ -48,6 +48,7 @@ COLUNAS_MOV = ['id_mov', 'data_hora', 'tipo_mov', 'patrimonio', 'origem', 'desti
 COLUNAS_TERMOS = ['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao', 'data_baixa', 'status_termo']
 COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_divergencia', 'status_resolucao', 'analista_responsavel', 'observacoes']
 COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
+COLUNAS_EMPREGADOS = ['matricula', 'nome', 'cpf', 'rg', 'projeto', 'unidade']
 
 ASSINATURA_DEV_HTML = """
 <div style='text-align: center; margin-top: 20px; padding: 6px; color: #888888; font-size: 0.75rem;'>
@@ -56,11 +57,9 @@ ASSINATURA_DEV_HTML = """
 """
 
 def exibir_marca_desenvolvedor():
-    """Renderiza a marca do desenvolvedor de forma discreta."""
     st.markdown(ASSINATURA_DEV_HTML, unsafe_allow_html=True)
 
 def normalizar_nome_coluna(col):
-    """Remove qualquer acento (õ, ó, ô, ç, ã, é, í, etc.), espaços extras e converte para minúsculas."""
     texto = str(col).strip().lower()
     texto_sem_acento = ''.join(
         c for c in unicodedata.normalize('NFD', texto)
@@ -69,10 +68,8 @@ def normalizar_nome_coluna(col):
     return texto_sem_acento.replace(' ', '_')
 
 def preparar_para_supabase(df, colunas_validas):
-    """Filtra apenas colunas existentes no banco e converte datas/nulos para texto compatível com JSON."""
     if df.empty:
         return []
-    
     cols_presentes = [c for c in df.columns if c in colunas_validas]
     df_limpo = df[cols_presentes].copy()
     df_limpo = df_limpo.fillna("")
@@ -82,11 +79,9 @@ def preparar_para_supabase(df, colunas_validas):
             lambda x: x.strftime('%Y-%m-%d') if isinstance(x, (pd.Timestamp, datetime)) else str(x).strip()
         )
         df_limpo[col] = df_limpo[col].replace({"None": "", "nan": "", "NaT": ""})
-        
     return df_limpo.to_dict(orient='records')
 
 def registrar_log_auditoria(acao, alvo, detalhes):
-    """Registra eventos de auditoria na nuvem sem exigir criação de nova tabela no Supabase."""
     try:
         usuario_acao = f"{st.session_state.get('nome_real', 'Sistema')} ({st.session_state.get('usuario', 'auto')})"
         id_log = f"AUD-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:19]}"
@@ -104,7 +99,6 @@ def registrar_log_auditoria(acao, alvo, detalhes):
         pass
 
 def calcular_uso_supabase(dfs_lista, limite_mb=500.0):
-    """Calcula a estimativa de armazenamento utilizado no PostgreSQL/Supabase (com overhead de índices)."""
     total_bytes = 0
     total_linhas = 0
     for df in dfs_lista:
@@ -143,6 +137,12 @@ def carregar_dados():
         termos_res = supabase.table('termos').select("*").execute()
         diverg_res = supabase.table('divergencias').select("*").execute()
         usuarios_res = supabase.table('usuarios').select("*").execute()
+        
+        try:
+            empregados_res = supabase.table('empregados').select("*").execute()
+            df_empregados = pd.DataFrame(empregados_res.data) if empregados_res.data else pd.DataFrame(columns=COLUNAS_EMPREGADOS)
+        except Exception:
+            df_empregados = pd.DataFrame(columns=COLUNAS_EMPREGADOS)
 
         df_ativos = pd.DataFrame(ativos_res.data) if ativos_res.data else pd.DataFrame(columns=COLUNAS_ATIVOS)
         df_mov = pd.DataFrame(mov_res.data) if mov_res.data else pd.DataFrame(columns=COLUNAS_MOV)
@@ -169,42 +169,39 @@ def carregar_dados():
             df_usuarios['usuario'] = df_usuarios['usuario'].astype(str).str.strip()
             df_usuarios['senha'] = df_usuarios['senha'].astype(str).str.strip()
             
-        return df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs
+        return df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs, df_empregados
     except Exception as e:
         st.error(f"Erro ao carregar dados da nuvem: {e}")
         return (
-            pd.DataFrame(columns=COLUNAS_ATIVOS),
-            pd.DataFrame(columns=COLUNAS_MOV),
-            pd.DataFrame(columns=COLUNAS_TERMOS),
-            pd.DataFrame(columns=COLUNAS_DIVERG),
-            pd.DataFrame(columns=COLUNAS_USUARIOS),
-            pd.DataFrame(columns=COLUNAS_DIVERG)
+            pd.DataFrame(columns=COLUNAS_ATIVOS), pd.DataFrame(columns=COLUNAS_MOV),
+            pd.DataFrame(columns=COLUNAS_TERMOS), pd.DataFrame(columns=COLUNAS_DIVERG),
+            pd.DataFrame(columns=COLUNAS_USUARIOS), pd.DataFrame(columns=COLUNAS_DIVERG),
+            pd.DataFrame(columns=COLUNAS_EMPREGADOS)
         )
 
-df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs = carregar_dados()
+df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs, df_empregados = carregar_dados()
 
-def salvar_dados(df_a=pd.DataFrame(), df_m=pd.DataFrame(), df_t=pd.DataFrame(), df_d=pd.DataFrame(), df_u=pd.DataFrame()):
+def salvar_dados(df_a=pd.DataFrame(), df_m=pd.DataFrame(), df_t=pd.DataFrame(), df_d=pd.DataFrame(), df_u=pd.DataFrame(), df_e=pd.DataFrame()):
     try:
         if not df_a.empty:
             dados_a = preparar_para_supabase(df_a, COLUNAS_ATIVOS)
-            if dados_a:
-                supabase.table('ativos_master').upsert(dados_a).execute()
+            if dados_a: supabase.table('ativos_master').upsert(dados_a).execute()
         if not df_m.empty:
             dados_m = preparar_para_supabase(df_m, COLUNAS_MOV)
-            if dados_m:
-                supabase.table('movimentacoes').upsert(dados_m).execute()
+            if dados_m: supabase.table('movimentacoes').upsert(dados_m).execute()
         if not df_t.empty:
             dados_t = preparar_para_supabase(df_t, COLUNAS_TERMOS)
-            if dados_t:
-                supabase.table('termos').upsert(dados_t).execute()
+            if dados_t: supabase.table('termos').upsert(dados_t).execute()
         if not df_d.empty:
             dados_d = preparar_para_supabase(df_d, COLUNAS_DIVERG)
-            if dados_d:
-                supabase.table('divergencias').upsert(dados_d).execute()
+            if dados_d: supabase.table('divergencias').upsert(dados_d).execute()
         if not df_u.empty:
             dados_u = preparar_para_supabase(df_u, COLUNAS_USUARIOS)
-            if dados_u:
-                supabase.table('usuarios').upsert(dados_u).execute()
+            if dados_u: supabase.table('usuarios').upsert(dados_u).execute()
+        if not df_e.empty:
+            dados_e = preparar_para_supabase(df_e, COLUNAS_EMPREGADOS)
+            if dados_e: supabase.table('empregados').upsert(dados_e).execute()
+            
         st.cache_data.clear()
         return True
     except Exception as e:
@@ -264,30 +261,29 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==========================================
-# FUNÇÃO GERADORA DE PDF (MODELO PROCISA FR-RH-P-026)
+# FUNÇÃO GERADORA DE PDF (MODELO PROCISA FR-RH-P-026 CORRIGIDO)
 # ==========================================
 def limpar_texto_pdf(texto):
     return str(texto).encode('latin-1', 'replace').decode('latin-1')
 
-def gerar_termo_pdf(patrimonio, responsavel, matricula, unidade, info_ativo):
+def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidade, info_ativo):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
     data_atual = datetime.now().strftime("%d/%m/%Y")
     
-    # Cabeçalho
+    # Cabeçalho da Página 1 - Corrigido com bordas LTR / LBR para alinhamento perfeito
     pdf.set_font("Arial", 'B', 10)
-    pdf.cell(40, 10, txt=limpar_texto_pdf("PROCISA"), border=1, align='C')
-    pdf.cell(90, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
+    pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
+    pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
     
-    # Segunda linha do cabeçalho
-    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border=1, align='C')
-    pdf.cell(90, 5, txt=limpar_texto_pdf("REF."), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("- 1 -"), border=1, ln=True, align='C')
+    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border='LBR', align='C')
+    pdf.cell(100, 5, txt=limpar_texto_pdf("REF."), border='LBR', align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("- 1 -"), border=1, ln=True, align='C')
     
     pdf.ln(5)
     
@@ -295,12 +291,12 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, unidade, info_ativo):
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), ln=True, align='C')
     
-    # Dados do Usuário
+    # Dados do Usuário (Auto-preenchidos)
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"Usuário: {responsavel}"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"RG: _________________  CPF/MF: _________________  Matrícula: {matricula}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"RG: {rg}      CPF/MF: {cpf}      Matrícula: {matricula}"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"Área: {unidade}"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf("Projeto: _________________"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"Projeto: {projeto}"), ln=True)
     
     pdf.ln(5)
     
@@ -330,15 +326,15 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, unidade, info_ativo):
     
     # Cabeçalho da Página 2
     pdf.set_font("Arial", 'B', 10)
-    pdf.cell(40, 10, txt=limpar_texto_pdf("PROCISA"), border=1, align='C')
-    pdf.cell(90, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
+    pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
+    pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
     
-    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border=1, align='C')
-    pdf.cell(90, 5, txt=limpar_texto_pdf("REF."), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
-    pdf.cell(30, 5, txt=limpar_texto_pdf("- 2 -"), border=1, ln=True, align='C')
+    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border='LBR', align='C')
+    pdf.cell(100, 5, txt=limpar_texto_pdf("REF."), border='LBR', align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf("- 2 -"), border=1, ln=True, align='C')
     
     pdf.ln(5)
     
@@ -359,7 +355,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, unidade, info_ativo):
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO: {condicao}"), ln=True)
     pdf.ln(5)
     
-    # Linhas extras para preenchimento manual de outros equipamentos se necessário
+    # Linhas extras para preenchimento manual
     for i in range(2, 6):
         pdf.cell(0, 6, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
         pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: _______________________________________"), ln=True)
@@ -561,7 +557,7 @@ if selecao_perfil and selecao_perfil.startswith("1"):
         st.subheader("Carga Inicial / Atualização em Massa (Upload)")
         st.info("💡 Os cabeçalhos da planilha são limpos e traduzidos automaticamente (sem acentos e em minúsculas).")
         
-        arquivo_up = st.file_uploader("Arraste o arquivo Excel (.xlsx)", type=["xlsx"])
+        arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
         if arquivo_up:
             try:
                 df_up = pd.read_excel(arquivo_up)
@@ -613,6 +609,36 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo Excel: {e}")
+                
+        st.divider()
+        
+        st.subheader("👥 Carga de Base de Colaboradores (Para o Termo de Responsabilidade)")
+        st.info("💡 A planilha deve conter as colunas: matricula, nome, cpf, rg, projeto, unidade.")
+        
+        arquivo_emp = st.file_uploader("Arraste a planilha de COLABORADORES (.xlsx)", type=["xlsx"], key="up_emp")
+        if arquivo_emp:
+            try:
+                df_emp_up = pd.read_excel(arquivo_emp)
+                df_emp_up.columns = [normalizar_nome_coluna(c) for c in df_emp_up.columns]
+                
+                if 'matricula' not in df_emp_up.columns:
+                    st.error(f"A coluna obrigatória 'matricula' não foi encontrada. Colunas lidas: {list(df_emp_up.columns)}")
+                else:
+                    df_emp_up = df_emp_up.dropna(subset=['matricula'])
+                    df_emp_up['matricula'] = df_emp_up['matricula'].astype(str).str.strip()
+                    df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
+                    
+                    st.write(f"**Pré-visualização ({len(df_emp_up)} colaboradores prontos):**")
+                    st.dataframe(df_emp_up.head(3), use_container_width=True)
+                    
+                    if st.button("🚀 Subir Base de Colaboradores", type="primary"):
+                        with st.spinner("Atualizando colaboradores no Supabase..."):
+                            if salvar_dados(df_e=df_emp_up):
+                                registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
+                                st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
+                                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo de colaboradores: {e}")
 
     exibir_marca_desenvolvedor()
 
@@ -731,22 +757,42 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
     with aba2:
         opcao_termo = st.radio("Ação:", ["Emitir Novo Termo", "Encerrar Termo (Devolução)"], horizontal=True)
         if opcao_termo == "Emitir Novo Termo":
+            
+            # --- BUSCA INTELIGENTE DE COLABORADOR ---
+            st.markdown("###### 🔍 Auto-Preenchimento de Colaborador")
+            matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados:")
+            
+            emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
+            if matricula_busca.strip() and not df_empregados.empty:
+                match_emp = df_empregados[df_empregados['matricula'].astype(str) == matricula_busca.strip()]
+                if not match_emp.empty:
+                    emp_dict = match_emp.iloc[0].fillna("").to_dict()
+                    st.success(f"✅ Colaborador localizado: {emp_dict.get('nome', '')}")
+                else:
+                    st.warning("⚠️ Matrícula não encontrada na base. Preencha os campos abaixo manualmente.")
+            
             with st.form("form_termo"):
+                st.markdown("###### 📝 Detalhes do Documento")
                 colA, colB = st.columns(2)
                 with colA:
-                    patrimonio_termo = st.text_input("Patrimônio:")
-                    responsavel_termo = st.text_input("Novo Responsável:")
+                    patrimonio_termo = st.text_input("Patrimônio do Equipamento:")
+                    responsavel_termo = st.text_input("Nome do Responsável:", value=emp_dict.get('nome', ''))
+                    cpf_termo = st.text_input("CPF:", value=emp_dict.get('cpf', ''))
+                    rg_termo = st.text_input("RG:", value=emp_dict.get('rg', ''))
                 with colB:
-                    matricula_termo = st.text_input("Matrícula:")
-                    unidade_termo = st.text_input("Unidade / CC:")
-                submit_termo = st.form_submit_button("Criar Documento", type="primary")
+                    matricula_termo = st.text_input("Matrícula (Confirmação):", value=matricula_busca.strip())
+                    unidade_termo = st.text_input("Unidade / Área:", value=emp_dict.get('unidade', ''))
+                    projeto_termo = st.text_input("Projeto:", value=emp_dict.get('projeto', ''))
+                submit_termo = st.form_submit_button("Gerar PDF do Termo", type="primary")
                 
             if submit_termo and patrimonio_termo.strip():
                 pat_termo_limpo = patrimonio_termo.strip()
                 ativo_info_termo = df_ativos[df_ativos['patrimonio_placa'].astype(str) == pat_termo_limpo] if not df_ativos.empty else pd.DataFrame()
                 if not ativo_info_termo.empty:
                     caminho_pdf = gerar_termo_pdf(
-                        pat_termo_limpo, responsavel_termo.strip(), matricula_termo.strip(), unidade_termo.strip(), ativo_info_termo
+                        pat_termo_limpo, responsavel_termo.strip(), matricula_termo.strip(), 
+                        cpf_termo.strip(), rg_termo.strip(), projeto_termo.strip(), unidade_termo.strip(), 
+                        ativo_info_termo
                     )
                     with open(caminho_pdf, "rb") as pdf_file: 
                         PDFbyte = pdf_file.read()
@@ -770,7 +816,7 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                         )
                         st.success("✅ Termo registrado e sistema atualizado! Clique abaixo para baixar o PDF.")
                         st.download_button(
-                            label="📥 Baixar Termo PDF (PROCISA FR-RH-P-026)", 
+                            label="📥 Baixar Termo PDF (Modelo PROCISA)", 
                             data=PDFbyte, 
                             file_name=f"Termo_PROCISA_{pat_termo_limpo}.pdf", 
                             mime='application/pdf'
@@ -939,8 +985,7 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
         
     st.header("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
     
-    # --- LINHA DISCRETA DE CAPACIDADE DO SUPABASE ---
-    info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios], limite_mb=500.0)
+    info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados], limite_mb=500.0)
     st.markdown(
         f"<div style='background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px 14px; font-size: 0.80rem; color: #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>"
         f"<span>☁️ <b>Armazenamento Supabase (500 MB):</b> Utilizado: <b>{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.1f}%)</b> &nbsp;|&nbsp; Livre: <b>{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.1f}%)</b> &nbsp;|&nbsp; Tabelas: {info_cap['dados_puros_kb']:.1f} KB ({info_cap['total_linhas']} reg.)</span>"
@@ -949,7 +994,6 @@ elif selecao_perfil and selecao_perfil.startswith("6"):
         unsafe_allow_html=True
     )
 
-    # Consolida logs do sistema + histórico de movimentações + emissões de termos em uma linha do tempo única
     lista_eventos = []
     
     if not df_logs.empty:
