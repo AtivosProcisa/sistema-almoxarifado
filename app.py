@@ -1,7 +1,17 @@
 import streamlit as st
+import importlib
 
 # Configuração da página (Deve ser sempre o primeiro comando do Streamlit)
 st.set_page_config(page_title="Gestão de Ativos e Equipamentos - PROCISA", layout="wide")
+
+import nuvem
+import operacao
+import gestor
+
+# Força o recarregamento dos módulos no servidor para evitar cache antigo do Python
+importlib.reload(nuvem)
+importlib.reload(operacao)
+importlib.reload(gestor)
 
 from nuvem import (
     supabase, carregar_dados, registrar_log_auditoria, exibir_marca_desenvolvedor
@@ -82,7 +92,15 @@ if not st.session_state.logged_in:
 # ==========================================
 st.sidebar.title(f"Olá, {st.session_state.nome_real}")
 st.sidebar.caption(f"Perfil: {st.session_state.perfil}")
-st.sidebar.button("Sair (Logout)", on_click=fazer_logout, use_container_width=True)
+
+col_sb1, col_sb2 = st.sidebar.columns(2)
+with col_sb1:
+    if st.button("🔄 Atualizar", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+with col_sb2:
+    st.button("🚪 Sair", on_click=fazer_logout, use_container_width=True)
+
 st.sidebar.markdown("---")
 st.sidebar.header("Módulos Disponíveis")
 
