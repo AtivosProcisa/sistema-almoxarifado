@@ -67,13 +67,9 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
         
     abas = st.tabs(abas_dashboard)
     
-    # --- ABA 0: INVENTÁRIO GERAL (SHOW/HIDE SEMPRE VISÍVEL) ---
+    # --- ABA 0: INVENTÁRIO GERAL ---
     with abas[0]:
-        if 'cols_inv_key' not in st.session_state:
-            st.session_state.cols_inv_key = list(COLUNAS_ATIVOS)
-
-        with st.container(border=True):
-            st.markdown("##### 👁️ Mostrar / Ocultar Colunas (Show / Hide Columns) e Filtros")
+        with st.expander("👁️ Filtros e Colunas Visíveis", expanded=False):
             cf1, cf2, cf3 = st.columns(3)
             lista_status = ["Todos"] + (sorted(df_ativos['status_sistema'].fillna("").unique().tolist()) if not df_ativos.empty else [])
             lista_coord = ["Todas"] + (sorted(df_ativos['coordenacao'].fillna("").unique().tolist()) if not df_ativos.empty else [])
@@ -83,20 +79,14 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
             with cf2:
                 f_coord = st.selectbox("Filtrar Coordenação:", lista_coord)
             with cf3:
-                f_busca = st.text_input("Buscar por Patrimônio, Série, Equipamento ou Cautela:")
+                f_busca = st.text_input("Buscar (Patrimônio, Série, Equipamento ou Cautela):")
                 
-            c_sh1, c_sh2 = st.columns([5, 1])
-            with c_sh2:
-                st.write("")
-                if st.button("🔄 Mostrar Todas", key="btn_reset_inv", use_container_width=True):
-                    st.session_state.cols_inv_key = list(COLUNAS_ATIVOS)
-                    st.rerun()
-            with c_sh1:
-                cols_selecionadas_inv = st.multiselect(
-                    "Clique no 'X' para ocultar colunas ou adicione de volta:",
-                    options=COLUNAS_ATIVOS,
-                    key="cols_inv_key"
-                )
+            cols_selecionadas_inv = st.multiselect(
+                "Ocultar ou Mostrar Colunas:",
+                options=COLUNAS_ATIVOS,
+                default=COLUNAS_ATIVOS,
+                key="cols_inv_key"
+            )
 
         cols_para_exibir = cols_selecionadas_inv if cols_selecionadas_inv else COLUNAS_ATIVOS
         
@@ -112,48 +102,30 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 df_inv_view = df_inv_view[mask_b]
             st.dataframe(df_inv_view[cols_para_exibir], use_container_width=True)
         else:
-            st.info("Nenhum ativo registado na base no momento. Utilize a aba '➕ Novo Cadastro Manual' ou '📥 Importar / Exportar Relatórios'.")
+            st.info("Nenhum ativo registado na base no momento.")
             st.dataframe(pd.DataFrame(columns=cols_para_exibir), use_container_width=True)
             
-    # --- ABA 1: HISTÓRICO DE MOVIMENTAÇÕES (SHOW/HIDE SEMPRE VISÍVEL) ---
+    # --- ABA 1: HISTÓRICO DE MOVIMENTAÇÕES ---
     with abas[1]:
-        if 'cols_mov_key' not in st.session_state:
-            st.session_state.cols_mov_key = list(COLUNAS_MOV)
-            
-        with st.container(border=True):
-            c_m1, c_m2 = st.columns([5, 1])
-            with c_m2:
-                st.write("")
-                if st.button("🔄 Mostrar Todas", key="btn_reset_mov", use_container_width=True):
-                    st.session_state.cols_mov_key = list(COLUNAS_MOV)
-                    st.rerun()
-            with c_m1:
-                cols_sel_mov = st.multiselect(
-                    "👁️ Mostrar / Ocultar Colunas (Movimentações):",
-                    options=COLUNAS_MOV,
-                    key="cols_mov_key"
-                )
+        with st.expander("👁️ Colunas Visíveis", expanded=False):
+            cols_sel_mov = st.multiselect(
+                "Ocultar ou Mostrar Colunas:",
+                options=COLUNAS_MOV,
+                default=COLUNAS_MOV,
+                key="cols_mov_key"
+            )
         cols_m_exibir = [c for c in (cols_sel_mov if cols_sel_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else (cols_sel_mov if cols_sel_mov else COLUNAS_MOV)
         st.dataframe(df_mov[cols_m_exibir] if not df_mov.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True)
 
-    # --- ABA 2: TERMOS EMITIDOS (SHOW/HIDE SEMPRE VISÍVEL) ---
+    # --- ABA 2: TERMOS EMITIDOS ---
     with abas[2]:
-        if 'cols_trm_key' not in st.session_state:
-            st.session_state.cols_trm_key = list(COLUNAS_TERMOS)
-            
-        with st.container(border=True):
-            c_t1, c_t2 = st.columns([5, 1])
-            with c_t2:
-                st.write("")
-                if st.button("🔄 Mostrar Todas", key="btn_reset_trm", use_container_width=True):
-                    st.session_state.cols_trm_key = list(COLUNAS_TERMOS)
-                    st.rerun()
-            with c_t1:
-                cols_sel_trm = st.multiselect(
-                    "👁️ Mostrar / Ocultar Colunas (Termos):",
-                    options=COLUNAS_TERMOS,
-                    key="cols_trm_key"
-                )
+        with st.expander("👁️ Colunas Visíveis", expanded=False):
+            cols_sel_trm = st.multiselect(
+                "Ocultar ou Mostrar Colunas:",
+                options=COLUNAS_TERMOS,
+                default=COLUNAS_TERMOS,
+                key="cols_trm_key"
+            )
         cols_t_exibir = [c for c in (cols_sel_trm if cols_sel_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else (cols_sel_trm if cols_sel_trm else COLUNAS_TERMOS)
         st.dataframe(df_termos[cols_t_exibir] if not df_termos.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True)
         
@@ -357,7 +329,6 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
     if st.session_state.perfil == 'Master':
         with abas[5]:
             st.subheader("❌ Exclusão de Registos por Seleção (Acesso Restrito Master)")
-            st.warning("⚠️ Marque a caixa **'🗑️ Excluir?'** nas linhas que deseja remover permanentemente do banco de dados e clique no botão de confirmação abaixo.")
             
             tipo_exclusao = st.radio("Selecione a Tabela para Exclusão:", ["📦 Ativos (Equipamentos)", "👥 Colaboradores (Empregados)"], horizontal=True)
             
