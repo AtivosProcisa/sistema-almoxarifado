@@ -67,6 +67,7 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
         
     abas = st.tabs(abas_dashboard)
     
+    # --- ABA 0: INVENTÁRIO GERAL COM SHOW/HIDE COLUMNS ---
     with abas[0]:
         if not df_ativos.empty:
             cf1, cf2, cf3 = st.columns(3)
@@ -76,7 +77,25 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 f_coord = st.selectbox("Filtrar Coordenação:", ["Todas"] + sorted(df_ativos['coordenacao'].fillna("").unique().tolist()))
             with cf3:
                 f_busca = st.text_input("Buscar por Patrimônio, Série, Equipamento ou Cautela:")
-                
+            
+            # Controle Show / Hide Columns (Mostrar / Ocultar Colunas)
+            with st.expander("👁️ Mostrar / Ocultar Colunas (Show / Hide Columns)", expanded=False):
+                c_sh1, c_sh2 = st.columns([4, 1])
+                with c_sh2:
+                    if st.button("🔄 Mostrar Todas", key="btn_reset_cols_inv", use_container_width=True):
+                        st.session_state.cols_visiveis_inv = COLUNAS_ATIVOS
+                        st.rerun()
+                with c_sh1:
+                    cols_selecionadas_inv = st.multiselect(
+                        "Selecione as colunas que deseja visualizar na tabela:",
+                        options=COLUNAS_ATIVOS,
+                        default=st.session_state.get('cols_visiveis_inv', COLUNAS_ATIVOS),
+                        key="ms_cols_inv"
+                    )
+                    st.session_state.cols_visiveis_inv = cols_selecionadas_inv
+
+            cols_para_exibir = cols_selecionadas_inv if cols_selecionadas_inv else COLUNAS_ATIVOS
+            
             df_inv_view = df_ativos[COLUNAS_ATIVOS].copy()
             if f_status != "Todos":
                 df_inv_view = df_inv_view[df_inv_view['status_sistema'] == f_status]
@@ -86,14 +105,40 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 t_b = f_busca.strip().lower()
                 mask_b = df_inv_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_b, na=False)).any(axis=1)
                 df_inv_view = df_inv_view[mask_b]
-            st.dataframe(df_inv_view, use_container_width=True)
+                
+            st.dataframe(df_inv_view[cols_para_exibir], use_container_width=True)
         else:
             st.dataframe(df_ativos, use_container_width=True)
             
+    # --- ABA 1: HISTÓRICO DE MOVIMENTAÇÕES COM SHOW/HIDE COLUMNS ---
     with abas[1]:
-        st.dataframe(df_mov, use_container_width=True)
+        if not df_mov.empty:
+            cols_disp_mov = [c for c in COLUNAS_MOV if c in df_mov.columns]
+            with st.expander("👁️ Mostrar / Ocultar Colunas (Show / Hide Columns)", expanded=False):
+                cols_sel_mov = st.multiselect(
+                    "Colunas visíveis (Movimentações):",
+                    options=cols_disp_mov,
+                    default=cols_disp_mov,
+                    key="ms_cols_mov"
+                )
+            st.dataframe(df_mov[cols_sel_mov if cols_sel_mov else cols_disp_mov], use_container_width=True)
+        else:
+            st.dataframe(df_mov, use_container_width=True)
+
+    # --- ABA 2: TERMOS EMITIDOS COM SHOW/HIDE COLUMNS ---
     with abas[2]:
-        st.dataframe(df_termos, use_container_width=True)
+        if not df_termos.empty:
+            cols_disp_trm = [c for c in COLUNAS_TERMOS if c in df_termos.columns]
+            with st.expander("👁️ Mostrar / Ocultar Colunas (Show / Hide Columns)", expanded=False):
+                cols_sel_trm = st.multiselect(
+                    "Colunas visíveis (Termos):",
+                    options=cols_disp_trm,
+                    default=cols_disp_trm,
+                    key="ms_cols_trm"
+                )
+            st.dataframe(df_termos[cols_sel_trm if cols_sel_trm else cols_disp_trm], use_container_width=True)
+        else:
+            st.dataframe(df_termos, use_container_width=True)
         
     with abas[3]:
         st.subheader("Cadastrar ou Atualizar Ativo Individual")
