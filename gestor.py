@@ -11,6 +11,18 @@ from nuvem import (
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel
 
 # ==========================================
+# FUNÇÕES DE GATILHO PARA MEMÓRIA (SHOW/HIDE)
+# ==========================================
+def update_cols_inv():
+    st.session_state.saved_cols_inv = st.session_state.ms_inv_key
+
+def update_cols_mov():
+    st.session_state.saved_cols_mov = st.session_state.ms_mov_key
+
+def update_cols_trm():
+    st.session_state.saved_cols_trm = st.session_state.ms_trm_key
+
+# ==========================================
 # MÓDULO 1: DASHBOARD E CONCILIAÇÃO
 # ==========================================
 def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados):
@@ -89,13 +101,13 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
             with cf3:
                 f_busca = st.text_input("Buscar (Patrimônio, Série, Equipamento ou Cautela):")
                 
-            cols_selecionadas_inv = st.multiselect(
+            st.multiselect(
                 "Ocultar ou Mostrar Colunas (Inventário):",
                 options=COLUNAS_ATIVOS,
-                default=st.session_state.saved_cols_inv
+                default=st.session_state.saved_cols_inv,
+                key="ms_inv_key",
+                on_change=update_cols_inv
             )
-            # Salva na variável blindada a cada mudança
-            st.session_state.saved_cols_inv = cols_selecionadas_inv
 
         cols_para_exibir = st.session_state.saved_cols_inv if st.session_state.saved_cols_inv else COLUNAS_ATIVOS
         
@@ -117,26 +129,26 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
     # --- ABA 1: HISTÓRICO DE MOVIMENTAÇÕES ---
     with abas[1]:
         with st.expander("👁️ Colunas Visíveis", expanded=False):
-            cols_sel_mov = st.multiselect(
+            st.multiselect(
                 "Ocultar ou Mostrar Colunas (Movimentações):",
                 options=COLUNAS_MOV,
-                default=st.session_state.saved_cols_mov
+                default=st.session_state.saved_cols_mov,
+                key="ms_mov_key",
+                on_change=update_cols_mov
             )
-            st.session_state.saved_cols_mov = cols_sel_mov
-            
         cols_m_exibir = [c for c in (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV)
         st.dataframe(df_mov[cols_m_exibir] if not df_mov.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True)
 
     # --- ABA 2: TERMOS EMITIDOS ---
     with abas[2]:
         with st.expander("👁️ Colunas Visíveis", expanded=False):
-            cols_sel_trm = st.multiselect(
+            st.multiselect(
                 "Ocultar ou Mostrar Colunas (Termos):",
                 options=COLUNAS_TERMOS,
-                default=st.session_state.saved_cols_trm
+                default=st.session_state.saved_cols_trm,
+                key="ms_trm_key",
+                on_change=update_cols_trm
             )
-            st.session_state.saved_cols_trm = cols_sel_trm
-            
         cols_t_exibir = [c for c in (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS)
         st.dataframe(df_termos[cols_t_exibir] if not df_termos.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True)
         
