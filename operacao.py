@@ -81,7 +81,6 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                 st.warning("⚠️ Matrícula não encontrada na base. Preencha manualmente abaixo.")
     
     if not ativo_info.empty:
-        # Lógica de Auto-Preenchimento de Origem e Destino conforme a modalidade
         origem_auto = str(cautela_atual) if cautela_atual else "ALMOXARIFADO CENTRAL"
         
         if cod_tipo == "MOV-01":
@@ -182,14 +181,41 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
             st.rerun()
         st.divider()
     
-    st.markdown("###### 📋 Fila Automática de Movimentações (Aguardando Conferência)")
     movs_pendentes = df_mov[df_mov['status_mov'] == 'Aguardando Conferência'] if not df_mov.empty else pd.DataFrame()
     
     if movs_pendentes.empty:
         st.success("🎉 Excelente! Nenhuma solicitação pendente no momento.")
     else:
-        st.dataframe(movs_pendentes[['id_mov', 'data_hora', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante', 'matricula_solicitante', 'projeto', 'data_efetiva']], use_container_width=True)
+        st.write("Abaixo estão as solicitações pendentes. Se necessitar cancelar algum pedido errado, marque a caixinha **'🗑️ Cancelar?'**. Caso contrário, selecione o ID abaixo da tabela para **Validá-lo**.")
         
+        df_mov_view = movs_pendentes[['id_mov', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante']].copy()
+        df_mov_view.insert(0, "Excluir", False)
+        
+        df_mov_editado = st.data_editor(
+            df_mov_view,
+            hide_index=True,
+            use_container_width=True,
+            disabled=[c for c in df_mov_view.columns if c != "Excluir"],
+            column_config={"Excluir": st.column_config.CheckboxColumn("🗑️ Cancelar?", default=False)},
+            key="editor_mov_pendentes"
+        )
+        
+        movs_selecionadas = df_mov_editado[df_mov_editado["Excluir"] == True]
+        if not movs_selecionadas.empty:
+            st.error(f"⚠️ Selecionou **{len(movs_selecionadas)} solicitação(ões)** para cancelamento direto da fila.")
+            if st.button(f"🗑️ Confirmar Cancelamento", type="primary"):
+                try:
+                    for m_del in movs_selecionadas['id_mov'].tolist():
+                        supabase.table('movimentacoes').delete().eq('id_mov', m_del).execute()
+                    registrar_log_auditoria("CANCELAMENTO MOV.", f"{len(movs_selecionadas)} itens", "Solicitações canceladas da fila do almoxarifado.")
+                    st.cache_data.clear()
+                    st.success("✅ Solicitações canceladas com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao cancelar: {e}")
+        
+        st.divider()
+        st.markdown("###### 🔄 Proceder com a Validação")
         id_selecionado = st.selectbox("Selecione o ID da Movimentação para Validar:", movs_pendentes['id_mov'].tolist())
         
         if id_selecionado:
@@ -204,14 +230,13 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
                 
                 st.info(f"**Ativo Vinculado:** {registro_atual.get('marca', '')} {registro_atual.get('modelo', '')} (Série: {registro_atual.get('numero_serie', '')}) | **Status Atual:** {status_antigo}")
                 
-                # Sugestão automática de Status conforme o tipo de movimentação
                 opcoes_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"]
                 if tipo_m in ["MOV-02", "MOV-05"] or 'ALMOX' in str(mov_atual.get('destino', '')).upper():
-                    idx_sugerido = 0 # Disponível
+                    idx_sugerido = 0
                 elif tipo_m == "MOV-04" or 'LAB' in str(mov_atual.get('destino', '')).upper():
-                    idx_sugerido = 2 # Em manutenção
+                    idx_sugerido = 2
                 else:
-                    idx_sugerido = 1 # Em uso
+                    idx_sugerido = 1
                 
                 with st.form("form_validacao_pendente"):
                     colA, colB = st.columns(2)
@@ -243,7 +268,6 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
                                 dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
                                 supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_selecionado).execute()
                                 
-                                # Gatilho 1: MOV-01 envia para Fila de Impressão
                                 if tipo_m.startswith("MOV-01"):
                                     mat_solic = limpar_texto_matricula(mov_atual.get('matricula_solicitante', ''))
                                     match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_solic] if (not df_empregados.empty and mat_solic) else pd.DataFrame()
@@ -267,7 +291,6 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
                                     registrar_log_auditoria("TERMO NA FILA", pat_real, f"Termo {id_termo} gerado e enviado para Fila de Impressão.")
                                     st.session_state.msg_sucesso = "✅ Validação concluída! O Termo de Responsabilidade foi enviado para a Fila de Impressão (Módulo 4)."
                                 
-                                # Gatilho 2: MOV-02 encerra termos ativos automaticamente
                                 elif tipo_m.startswith("MOV-02"):
                                     termos_abertos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
                                     if not termos_abertos.empty:
