@@ -31,6 +31,7 @@ COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
 COLUNAS_EMPREGADOS = ['matricula', 'nome', 'cpf', 'rg', 'projeto', 'unidade']
 
 VALUES_INVALIDOS = {'', 'none', 'nan', 'null', 'nat', 'undefined', '<na>'}
+ID_PREF_COLUNAS = "PREF-COLS-DASHBOARD"
 
 ASSINATURA_DEV_HTML = """
 <div style='text-align: center; margin-top: 20px; padding: 6px; color: #888888; font-size: 0.75rem;'>
@@ -61,7 +62,6 @@ def normalizar_nome_coluna(col):
     return texto_sem_acento.replace(' ', '_').replace('-', '_')
 
 def matricula_valida(val):
-    """Verifica se uma chave (patrimônio ou matrícula) não é nula, vazia nem 'none'/'nan'."""
     if val is None or pd.isna(val):
         return False
     texto = str(val).strip()
@@ -108,9 +108,54 @@ def registrar_log_auditoria(acao, alvo, detalhes):
     except Exception:
         pass
 
+# ==========================================
+# PERSISTÊNCIA DE COLUNAS NA NUVEM (SUPABASE)
+# ==========================================
+def carregar_preferencias_colunas():
+    """Lê do Supabase a última configuração de colunas salva pelo utilizador."""
+    padrao = {
+        'inv': list(COLUNAS_ATIVOS),
+        'mov': list(COLUNAS_MOV),
+        'trm': list(COLUNAS_TERMOS)
+    }
+    try:
+        res = supabase.table('divergencias').select("observacoes").eq('id_divergencia', ID_PREF_COLUNAS).execute()
+        if res.data and res.data[0].get('observacoes'):
+            dados = json.loads(res.data[0]['observacoes'])
+            inv = [c for c in dados.get('inv', COLUNAS_ATIVOS) if c in COLUNAS_ATIVOS]
+            mov = [c for c in dados.get('mov', COLUNAS_MOV) if c in COLUNAS_MOV]
+            trm = [c for c in dados.get('trm', COLUNAS_TERMOS) if c in COLUNAS_TERMOS]
+            return {
+                'inv': inv if inv else list(COLUNAS_ATIVOS),
+                'mov': mov if mov else list(COLUNAS_MOV),
+                'trm': trm if trm else list(COLUNAS_TERMOS)
+            }
+    except Exception:
+        pass
+    return padrao
+
+def salvar_preferencias_colunas(cols_inv, cols_mov, cols_trm):
+    """Salva imediatamente no Supabase a configuração atual de colunas."""
+    try:
+        payload = json.dumps({
+            'inv': list(cols_inv) if cols_inv else list(COLUNAS_ATIVOS),
+            'mov': list(cols_mov) if cols_mov else list(COLUNAS_MOV),
+            'trm': list(cols_trm) if cols_trm else list(COLUNAS_TERMOS)
+        }, ensure_ascii=False)
+        registro = {
+            'id_divergencia': ID_PREF_COLUNAS,
+            'data_registro': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'patrimonio': 'CONFIG',
+            'tipo_divergencia': '[CONFIG-SISTEMA] COLUNAS_DASHBOARD',
+            'status_resolucao': 'Resolvido',
+            'analista_responsavel': st.session_state.get('usuario', 'master'),
+            'observacoes': payload
+        }
+        supabase.table('divergencias').upsert([registro]).execute()
+    except Exception:
+        pass
+
 def expurgar_linhas_nulas_nuvem():
-    """Remove silenciosamente do Supabase linhas travadas com NULL ou 'None' em ativos_master e empregados."""
-    # 1. Remove linhas onde a coluna está realmente NULL no PostgreSQL
     try:
         supabase.table('ativos_master').delete().is_('patrimonio', 'null').execute()
     except Exception:
@@ -124,7 +169,6 @@ def expurgar_linhas_nulas_nuvem():
     except Exception:
         pass
 
-    # 2. Remove linhas onde foi gravado texto 'None', 'nan' ou vazio
     for val_lixo in ["None", "none", "NONE", "nan", "NaN", "null", "NULL", ""]:
         try:
             supabase.table('ativos_master').delete().eq('patrimonio', val_lixo).execute()
@@ -158,7 +202,6 @@ def carregar_dados():
         
         precisa_expurgo = False
 
-        # Verifica e filtra linhas "None"/NULL na tabela de empregados
         if not df_empregados.empty and 'matricula' in df_empregados.columns:
             mask_emp_invalida = ~df_empregados['matricula'].apply(matricula_valida)
             if mask_emp_invalida.any():
@@ -170,20 +213,17 @@ def carregar_dados():
             if col not in df_ativos.columns:
                 df_ativos[col] = "Disponível" if col == 'status_sistema' else ""
                 
-        # Verifica e filtra linhas "None"/NULL travadas na tabela de ativos_master
         if not df_ativos.empty:
             mask_ativo_invalido = ~df_ativos['patrimonio'].apply(matricula_valida)
             if mask_ativo_invalido.any():
                 precisa_expurgo = True
                 df_ativos = df_ativos[~mask_ativo_invalido].copy()
             df_ativos['patrimonio'] = df_ativos['patrimonio'].apply(limpar_texto_matricula)
-            # Substitui qualquer None residual nas outras colunas por texto vazio para exibição limpa
             df_ativos = df_ativos.fillna("").replace({"None": "", "none": "", "nan": "", "NaN": "", "null": ""})
 
         if precisa_expurgo:
             expurgar_linhas_nulas_nuvem()
 
-        # Higieniza exibição de matrículas "none" em movimentações e termos
         if not df_mov.empty and 'matricula_solicitante' in df_mov.columns:
             df_mov['matricula_solicitante'] = df_mov['matricula_solicitante'].apply(limpar_texto_matricula)
         if not df_termos.empty and 'matricula' in df_termos.columns:
@@ -191,9 +231,12 @@ def carregar_dados():
 
         if not df_diverg_bruto.empty and 'tipo_divergencia' in df_diverg_bruto.columns:
             df_diverg_bruto['status_resolucao'] = df_diverg_bruto['status_resolucao'].fillna('Pendente').replace("", "Pendente")
-            mask_log = df_diverg_bruto['tipo_divergencia'].astype(str).str.startswith('[LOG-SISTEMA]')
+            tipo_str = df_diverg_bruto['tipo_divergencia'].astype(str)
+            mask_log = tipo_str.str.startswith('[LOG-SISTEMA]')
+            mask_cfg = tipo_str.str.startswith('[CONFIG-SISTEMA]') | (df_diverg_bruto['id_divergencia'].astype(str) == ID_PREF_COLUNAS)
+            
             df_logs = df_diverg_bruto[mask_log].copy()
-            df_diverg = df_diverg_bruto[~mask_log].copy()
+            df_diverg = df_diverg_bruto[~mask_log & ~mask_cfg].copy()
         else:
             df_logs = pd.DataFrame(columns=COLUNAS_DIVERG)
             df_diverg = df_diverg_bruto
