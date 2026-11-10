@@ -6,7 +6,7 @@ from nuvem import (
     supabase, COLUNAS_ATIVOS, COLUNAS_MOV, COLUNAS_TERMOS, COLUNAS_DIVERG, COLUNAS_EMPREGADOS,
     normalizar_nome_coluna, salvar_dados_massa, registrar_log_auditoria,
     calcular_uso_supabase, exibir_marca_desenvolvedor, matricula_valida,
-    limpar_texto_matricula, expurgar_matriculas_none_nuvem
+    limpar_texto_matricula, expurgar_linhas_nulas_nuvem
 )
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel
 
@@ -245,6 +245,7 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         
                         if st.button("🚀 Confirmar e Subir Equipamentos", type="primary"):
                             with st.spinner("Enviando equipamentos para o Supabase..."):
+                                expurgar_linhas_nulas_nuvem()
                                 if salvar_dados_massa('ativos_master', df_up, COLUNAS_ATIVOS):
                                     detalhe_log = f"Arquivo '{arquivo_up.name}' enviado. Novos: +{qtd_novos} | Atualizados: {qtd_atualizados}."
                                     registrar_log_auditoria("UPLOAD PLANILHA", arquivo_up.name, detalhe_log)
@@ -271,19 +272,18 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                     if 'matricula' not in df_emp_up.columns:
                         st.error("A coluna obrigatória 'matricula' não foi encontrada.")
                     else:
-                        # Bloqueia matrículas "None", vazias ou inválidas antes de subir
                         total_lido = len(df_emp_up)
                         df_emp_up = df_emp_up[df_emp_up['matricula'].apply(matricula_valida)].copy()
                         df_emp_up['matricula'] = df_emp_up['matricula'].apply(limpar_texto_matricula)
                         df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
                         ignorados = total_lido - len(df_emp_up)
                         
-                        st.caption(f"**{len(df_emp_up)}** colaboradores válidos prontos ({ignorados} linhas com matrícula 'None'/vazia descartadas).")
+                        st.caption(f"**{len(df_emp_up)}** colaboradores válidos prontos ({ignorados} linhas sem matrícula ignoradas).")
                         st.dataframe(df_emp_up.head(3), use_container_width=True)
                         
                         if st.button("🚀 Subir Base de Colaboradores", type="primary"):
                             with st.spinner("Atualizando colaboradores no Supabase..."):
-                                expurgar_matriculas_none_nuvem()
+                                expurgar_linhas_nulas_nuvem()
                                 if salvar_dados_massa('empregados', df_emp_up, COLUNAS_EMPREGADOS):
                                     registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
                                     st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
@@ -295,17 +295,7 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
     if st.session_state.perfil == 'Master':
         with abas[5]:
             st.subheader("❌ Exclusão de Registos por Seleção (Acesso Restrito Master)")
-            
-            col_clean1, col_clean2 = st.columns([3, 1])
-            with col_clean1:
-                st.warning("⚠️ Marque a caixa **'🗑️ Excluir?'** nas linhas que deseja remover permanentemente do banco de dados.")
-            with col_clean2:
-                if st.button("🧹 Limpar Matrículas 'None'", use_container_width=True, help="Remove da nuvem qualquer colaborador, termo ou movimentação com matrícula 'None'"):
-                    rem = expurgar_matriculas_none_nuvem()
-                    st.cache_data.clear()
-                    registrar_log_auditoria("HIGIENIZAÇÃO NUVEM", "Matrículas None", f"Limpeza executada pelo Master ({rem} registos inválidos removidos).")
-                    st.success("✅ Limpeza de matrículas 'None' concluída na nuvem!")
-                    st.rerun()
+            st.warning("⚠️ Marque a caixa **'🗑️ Excluir?'** nas linhas que deseja remover permanentemente do banco de dados e clique no botão de confirmação abaixo.")
             
             tipo_exclusao = st.radio("Selecione a Tabela para Exclusão:", ["📦 Ativos (Equipamentos)", "👥 Colaboradores (Empregados)"], horizontal=True)
             
@@ -336,12 +326,13 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         st.error(f"⚠️ Você selecionou **{len(selecionados)} ativo(s)** para exclusão definitiva: `{', '.join(selecionados['patrimonio'].astype(str).tolist())}`")
                         if st.button(f"🗑️ Confirmar Exclusão de {len(selecionados)} Ativo(s)", type="primary"):
                             try:
-                                lista_pats = selecionados['patrimonio'].astype(str).tolist()
+                                expurgar_linhas_nulas_nuvem()
+                                lista_pats = [p for p in selecionados['patrimonio'].astype(str).tolist() if matricula_valida(p)]
                                 for p_del in lista_pats:
                                     supabase.table('ativos_master').delete().eq('patrimonio', p_del).execute()
-                                registrar_log_auditoria("EXCLUSÃO EM LOTE (ATIVOS)", f"{len(lista_pats)} itens", f"Patrimônios excluídos pelo Master: {', '.join(lista_pats)}")
+                                registrar_log_auditoria("EXCLUSÃO EM LOTE (ATIVOS)", f"{len(selecionados)} itens", f"Patrimônios excluídos pelo Master: {', '.join(lista_pats)}")
                                 st.cache_data.clear()
-                                st.success(f"✅ {len(lista_pats)} ativo(s) excluído(s) permanentemente!")
+                                st.success(f"✅ {len(selecionados)} ativo(s) excluído(s) permanentemente!")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro ao excluir ativos: {e}")
@@ -374,12 +365,13 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         st.error(f"⚠️ Você selecionou **{len(emp_selecionados)} colaborador(es)** para exclusão: `{', '.join(emp_selecionados['nome'].astype(str).tolist())}`")
                         if st.button(f"🗑️ Confirmar Exclusão de {len(emp_selecionados)} Colaborador(es)", type="primary"):
                             try:
-                                lista_mats = emp_selecionados['matricula'].astype(str).tolist()
+                                expurgar_linhas_nulas_nuvem()
+                                lista_mats = [m for m in emp_selecionados['matricula'].astype(str).tolist() if matricula_valida(m)]
                                 for m_del in lista_mats:
                                     supabase.table('empregados').delete().eq('matricula', m_del).execute()
-                                registrar_log_auditoria("EXCLUSÃO COLABORADORES", f"{len(lista_mats)} itens", f"Matrículas excluídas: {', '.join(lista_mats)}")
+                                registrar_log_auditoria("EXCLUSÃO COLABORADORES", f"{len(emp_selecionados)} itens", f"Matrículas excluídas: {', '.join(lista_mats)}")
                                 st.cache_data.clear()
-                                st.success(f"✅ {len(lista_mats)} colaborador(es) removido(s) com sucesso!")
+                                st.success(f"✅ {len(emp_selecionados)} colaborador(es) removido(s) com sucesso!")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Erro ao excluir colaboradores: {e}")
