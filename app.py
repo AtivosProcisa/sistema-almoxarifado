@@ -18,7 +18,7 @@ except ImportError:
     st.error("A biblioteca 'supabase' não está instalada. Verifique o arquivo requirements.txt")
 
 # Configuração da página
-st.set_page_config(page_title="Gestão de Ativos e Equipamentos", layout="wide")
+st.set_page_config(page_title="Gestão de Ativos e Equipamentos - PROCISA", layout="wide")
 
 # ==========================================
 # CONFIGURAÇÃO DO SUPABASE (NUVEM)
@@ -89,6 +89,19 @@ def preparar_para_supabase(df, colunas_validas):
         )
         df_limpo[col] = df_limpo[col].replace({"None": "", "nan": "", "NaT": ""})
     return df_limpo.to_dict(orient='records')
+
+def converter_df_excel_simples(df, nome_aba="Relatorio"):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name=nome_aba[:31])
+    return output.getvalue()
+
+def gerar_backup_completo_excel(dict_dfs):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for nome_aba, df_item in dict_dfs.items():
+            df_item.to_excel(writer, index=False, sheet_name=nome_aba[:31])
+    return output.getvalue()
 
 def registrar_log_auditoria(acao, alvo, detalhes):
     try:
@@ -267,7 +280,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ==========================================
-# FUNÇÃO GERADORA DE PDF (MODELO PROCISA FR-RH-P-026)
+# FUNÇÃO GERADORA DE PDF (MODELO PROCISA FR-RH-P-026 COMPLETO)
 # ==========================================
 def limpar_texto_pdf(texto):
     return str(texto).encode('latin-1', 'replace').decode('latin-1')
@@ -279,6 +292,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     
     data_atual = datetime.now().strftime("%d/%m/%Y")
     
+    # Cabeçalho Página 1
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
     pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
@@ -343,34 +357,39 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
     pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
     
-    marca = str(info_ativo.iloc[0].get('marca', ''))
-    modelo = str(info_ativo.iloc[0].get('modelo', ''))
-    serie = str(info_ativo.iloc[0].get('numero_serie', ''))
-    condicao = str(info_ativo.iloc[0].get('condicoes_para_uso', ''))
+    reg_ativo = info_ativo.iloc[0]
+    eqp_nome = str(reg_ativo.get('equipamento', '')).strip()
+    marca = str(reg_ativo.get('marca', '')).strip()
+    modelo = str(reg_ativo.get('modelo', '')).strip()
+    serie = str(reg_ativo.get('numero_serie', '')).strip()
+    condicao = str(reg_ativo.get('condicoes_para_uso', '')).strip()
+    acessorios = str(reg_ativo.get('acessorios', '')).strip()
+    coordenador = str(reg_ativo.get('coordenacao', unidade)).strip()
+    nf_procisa = str(reg_ativo.get('nf_procisa', '')).strip()
     
-    pdf.ln(5)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"1. MARCA/MODELO: {marca} {modelo}"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE ATIVO: {patrimonio}"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO: {condicao}"), ln=True)
-    pdf.ln(5)
+    situacao_completa = f"{condicao} - {acessorios}".strip(" -") if acessorios else condicao
+    
+    pdf.ln(4)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"1. MARCA/MODELO: {eqp_nome} {marca} {modelo}".strip()), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}      NÚMERO DE ATIVO: {patrimonio}"), ln=True)
+    pdf.multi_cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO / ACESSÓRIOS: {situacao_completa}"))
+    pdf.ln(3)
     
     for i in range(2, 6):
-        pdf.cell(0, 6, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
-        pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: _______________________________________"), ln=True)
-        pdf.cell(0, 6, txt=limpar_texto_pdf("   NÚMERO DE ATIVO: _______________________________________"), ln=True)
-        pdf.cell(0, 6, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
-        pdf.ln(3)
+        pdf.cell(0, 5, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
+        pdf.cell(0, 5, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: ___________________  NÚMERO DE ATIVO: ___________________"), ln=True)
+        pdf.cell(0, 5, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
+        pdf.ln(2)
         
-    pdf.ln(5)
+    pdf.ln(3)
     pdf.cell(0, 6, txt=limpar_texto_pdf("MOTIVO DA DEVOLUÇÃO:"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf("[  ] MANUTENÇÃO   [  ] DESLIGAMENTO   [  ] CALIBRAÇÃO"), ln=True)
     
-    pdf.ln(5)
-    pdf.cell(0, 6, txt=limpar_texto_pdf("OBSERVAÇÕES: __________________________________________________________________________"), ln=True)
-    pdf.cell(0, 6, txt=limpar_texto_pdf("COORD. RESPONSÁVEL: ______________________  NÚMERO DA NF: ______________________"), ln=True)
+    pdf.ln(3)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"OBSERVAÇÕES: {acessorios if acessorios else '________________________________________________________________'}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"COORD. RESPONSÁVEL: {coordenador if coordenador else '______________________'}      NÚMERO DA NF: {nf_procisa if nf_procisa else '______________________'}"), ln=True)
     
-    pdf.ln(15)
+    pdf.ln(12)
     pdf.cell(90, 10, txt="___________________________________", align='C')
     pdf.cell(90, 10, txt="___________________________________", ln=True, align='C')
     pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
@@ -459,29 +478,59 @@ if selecao_perfil and selecao_perfil.startswith("1"):
         mask_almox = cautela_upper.str.contains('ALMOX')
         mask_disp = status_upper == 'DISPONÍVEL'
         mask_uso = status_upper == 'EM USO'
+        mask_manut = status_upper.str.contains('MANUTEN') | cautela_upper.str.contains('LAB')
         
         disp_estoque = len(df_ativos[mask_disp & mask_almox])
         em_uso = len(df_ativos[mask_uso])
+        em_manut = len(df_ativos[mask_manut])
     else:
-        disp_estoque = 0
-        em_uso = 0
+        disp_estoque, em_uso, em_manut = 0, 0, 0
         
     diverg_pend = len(df_diverg[df_diverg['status_resolucao'] != 'Resolvido']) if not df_diverg.empty else 0
+    termos_fila = len(df_termos[df_termos['status_termo'] == 'Pendente Impressão']) if not df_termos.empty else 0
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total de Ativos Cadastrados", total_ativos)
-    col2.metric("Disponíveis em Estoque (Almox)", disp_estoque, help="Requer status 'Disponível' e Cautela contendo 'Almoxarifado'")
-    col3.metric("Em Uso (Campo/Responsáveis)", em_uso)
-    col4.metric("Divergências Pendentes", diverg_pend, delta_color="inverse")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total de Ativos", total_ativos)
+    col2.metric("Disponíveis (Almox)", disp_estoque, help="Status 'Disponível' + Cautela 'Almoxarifado'")
+    col3.metric("Em Uso (Campo)", em_uso)
+    col4.metric("Laboratório / Manut.", em_manut)
+    col5.metric("Divergências / Fila Termos", f"{diverg_pend} / {termos_fila}")
 
-    abas_dashboard = ["Inventário Geral", "Histórico de Movimentações", "Termos Emitidos", "➕ Novo Cadastro Manual", "🔄 Importar / Exportar"]
+    abas_dashboard = [
+        "Inventário Geral", 
+        "Histórico de Movimentações", 
+        "Termos Emitidos", 
+        "➕ Novo Cadastro Manual", 
+        "📥 Importar / Exportar Relatórios"
+    ]
     if st.session_state.perfil == 'Master':
-        abas_dashboard.append("❌ Excluir Ativo (Master)")
+        abas_dashboard.append("❌ Excluir Registos (Master)")
         
     abas = st.tabs(abas_dashboard)
     
     with abas[0]:
-        st.dataframe(df_ativos[COLUNAS_ATIVOS] if not df_ativos.empty else df_ativos, use_container_width=True)
+        if not df_ativos.empty:
+            cf1, cf2, cf3 = st.columns(3)
+            with cf1:
+                f_status = st.selectbox("Filtrar Status:", ["Todos"] + sorted(df_ativos['status_sistema'].fillna("").unique().tolist()))
+            with cf2:
+                f_coord = st.selectbox("Filtrar Coordenação:", ["Todas"] + sorted(df_ativos['coordenacao'].fillna("").unique().tolist()))
+            with cf3:
+                f_busca = st.text_input("Buscar por Patrimônio, Série, Equipamento ou Cautela:")
+                
+            df_inv_view = df_ativos[COLUNAS_ATIVOS].copy()
+            if f_status != "Todos":
+                df_inv_view = df_inv_view[df_inv_view['status_sistema'] == f_status]
+            if f_coord != "Todas":
+                df_inv_view = df_inv_view[df_inv_view['coordenacao'] == f_coord]
+            if f_busca.strip():
+                t_b = f_busca.strip().lower()
+                mask_b = df_inv_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_b, na=False)).any(axis=1)
+                df_inv_view = df_inv_view[mask_b]
+            st.dataframe(df_inv_view, use_container_width=True)
+        else:
+            st.dataframe(df_ativos, use_container_width=True)
+            
     with abas[1]:
         st.dataframe(df_mov, use_container_width=True)
     with abas[2]:
@@ -546,9 +595,7 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                             qtd_depois = qtd_antes + 1
                             
                         st.cache_data.clear()
-                        
-                        detalhe_log = f"Ativo {pat_limpo} ({cad_marca} {cad_modelo}) salvo via formulário."
-                        registrar_log_auditoria(tipo_op, pat_limpo, detalhe_log)
+                        registrar_log_auditoria(tipo_op, pat_limpo, f"Ativo {pat_limpo} ({cad_marca} {cad_modelo}) salvo via formulário.")
                         
                         st.session_state.resumo_ultima_operacao = {
                             'titulo': f"Cadastro/Atualização Concluída ({pat_limpo})",
@@ -565,129 +612,207 @@ if selecao_perfil and selecao_perfil.startswith("1"):
                     st.error("O campo 'Patrimônio' é obrigatório.")
 
     with abas[4]:
-        st.subheader("Exportar Relatórios (Download)")
-        st.write("Baixe a base de ativos atualizada diretamente da nuvem para o seu computador.")
+        st.subheader("📤 Exportar Relatórios do Sistema (Download)")
+        st.write("Extraia a qualquer momento as bases atualizadas diretamente da nuvem em formato Excel (`.xlsx`).")
         
-        def converter_df_excel(df):
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_export = df[COLUNAS_ATIVOS] if not df.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
-                df_export.to_excel(writer, index=False, sheet_name='Base_Ativos')
-            return output.getvalue()
+        stamp = datetime.now().strftime('%Y%m%d_%H%M')
+        c_exp1, c_exp2, c_exp3 = st.columns(3)
+        
+        with c_exp1:
+            df_a_exp = df_ativos[COLUNAS_ATIVOS] if not df_ativos.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
+            if st.download_button("📥 Baixar Relatório de Ativos (.xlsx)", data=converter_df_excel_simples(df_a_exp, "Ativos"), file_name=f"Ativos_Procisa_{stamp}.xlsx", use_container_width=True):
+                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Ativos", f"Download de {len(df_a_exp)} ativos.")
+                
+            df_e_exp = df_empregados[COLUNAS_EMPREGADOS] if not df_empregados.empty else pd.DataFrame(columns=COLUNAS_EMPREGADOS)
+            if st.download_button("📥 Baixar Base de Colaboradores (.xlsx)", data=converter_df_excel_simples(df_e_exp, "Colaboradores"), file_name=f"Colaboradores_Procisa_{stamp}.xlsx", use_container_width=True):
+                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Colaboradores", f"Download de {len(df_e_exp)} colaboradores.")
 
-        excel_data = converter_df_excel(df_ativos)
-        if st.download_button(
-            label="📥 Baixar Base / Modelo de Ativos (.xlsx)", 
-            data=excel_data, 
-            file_name=f"Base_Ativos_Procisa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ):
-            registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Base Geral", f"Download da planilha de ativos ({len(df_ativos)} registros).")
+        with c_exp2:
+            df_m_exp = df_mov[COLUNAS_MOV] if not df_mov.empty else pd.DataFrame(columns=COLUNAS_MOV)
+            if st.download_button("📥 Baixar Histórico Movimentações (.xlsx)", data=converter_df_excel_simples(df_m_exp, "Movimentacoes"), file_name=f"Movimentacoes_Procisa_{stamp}.xlsx", use_container_width=True):
+                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Movimentações", f"Download de {len(df_m_exp)} movimentações.")
+                
+            df_t_exp = df_termos[COLUNAS_TERMOS] if not df_termos.empty else pd.DataFrame(columns=COLUNAS_TERMOS)
+            if st.download_button("📥 Baixar Relatório de Termos (.xlsx)", data=converter_df_excel_simples(df_t_exp, "Termos"), file_name=f"Termos_Procisa_{stamp}.xlsx", use_container_width=True):
+                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Termos", f"Download de {len(df_t_exp)} termos.")
+
+        with c_exp3:
+            df_d_exp = df_diverg[COLUNAS_DIVERG] if not df_diverg.empty else pd.DataFrame(columns=COLUNAS_DIVERG)
+            if st.download_button("📥 Baixar Relatório Divergências (.xlsx)", data=converter_df_excel_simples(df_d_exp, "Divergencias"), file_name=f"Divergencias_Procisa_{stamp}.xlsx", use_container_width=True):
+                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Divergências", f"Download de {len(df_d_exp)} divergências.")
+                
+            backup_bytes = gerar_backup_completo_excel({
+                "Ativos_Master": df_a_exp,
+                "Colaboradores": df_e_exp,
+                "Movimentacoes": df_m_exp,
+                "Termos": df_t_exp,
+                "Divergencias": df_d_exp
+            })
+            if st.download_button("📦 Baixar Backup Completo (Multi-Abas)", data=backup_bytes, file_name=f"Backup_Geral_Procisa_{stamp}.xlsx", type="primary", use_container_width=True):
+                registrar_log_auditoria("BACKUP COMPLETO", "Sistema", "Exportação de todas as tabelas em arquivo multi-abas.")
 
         st.divider()
-
-        st.subheader("Carga Inicial / Atualização em Massa (Upload)")
-        st.info("💡 Os cabeçalhos da planilha são limpos e traduzidos automaticamente (sem acentos e em minúsculas).")
+        st.subheader("📥 Carga Inicial / Atualização em Massa (Upload)")
         
-        arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
-        if arquivo_up:
-            try:
-                df_up = pd.read_excel(arquivo_up)
-                df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
-                
-                if 'status_sistema' not in df_up.columns:
-                    df_up['status_sistema'] = 'Disponível'
-                
-                if 'patrimonio' not in df_up.columns:
-                    st.error(f"A coluna obrigatória 'patrimonio' não foi encontrada na planilha. Colunas lidas: {list(df_up.columns)}")
-                else:
-                    df_up = df_up.dropna(subset=['patrimonio'])
-                    df_up['patrimonio'] = df_up['patrimonio'].astype(str).str.strip()
-                    df_up = df_up[df_up['patrimonio'] != '']
-                    df_up = df_up.drop_duplicates(subset=['patrimonio'], keep='last')
+        col_up1, col_up2 = st.columns(2)
+        with col_up1:
+            st.markdown("##### 📦 Planilha de Equipamentos (V1.2)")
+            arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
+            if arquivo_up:
+                try:
+                    df_up = pd.read_excel(arquivo_up)
+                    df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
                     
-                    atuais_set = set(df_ativos['patrimonio'].astype(str).str.strip()) if not df_ativos.empty else set()
-                    novos_set = set(df_up['patrimonio'])
+                    if 'status_sistema' not in df_up.columns:
+                        df_up['status_sistema'] = 'Disponível'
                     
-                    qtd_antes = len(atuais_set)
-                    qtd_novos = len(novos_set - atuais_set)
-                    qtd_atualizados = len(novos_set.intersection(atuais_set))
-                    qtd_depois = len(atuais_set.union(novos_set))
+                    if 'patrimonio' not in df_up.columns:
+                        st.error(f"A coluna 'patrimonio' não foi encontrada. Colunas lidas: {list(df_up.columns)}")
+                    else:
+                        df_up = df_up.dropna(subset=['patrimonio'])
+                        df_up['patrimonio'] = df_up['patrimonio'].astype(str).str.strip()
+                        df_up = df_up[df_up['patrimonio'] != '']
+                        df_up = df_up.drop_duplicates(subset=['patrimonio'], keep='last')
+                        
+                        atuais_set = set(df_ativos['patrimonio'].astype(str).str.strip()) if not df_ativos.empty else set()
+                        novos_set = set(df_up['patrimonio'])
+                        
+                        qtd_antes = len(atuais_set)
+                        qtd_novos = len(novos_set - atuais_set)
+                        qtd_atualizados = len(novos_set.intersection(atuais_set))
+                        qtd_depois = len(atuais_set.union(novos_set))
+                        
+                        st.caption(f"Antes: **{qtd_antes}** | Novos: **+{qtd_novos}** | Atualizados: **{qtd_atualizados}** | Projeção: **{qtd_depois}**")
+                        st.dataframe(df_up.head(3), use_container_width=True)
+                        
+                        if st.button("🚀 Confirmar e Subir Equipamentos", type="primary"):
+                            with st.spinner("Enviando equipamentos para o Supabase..."):
+                                if salvar_dados_massa('ativos_master', df_up, COLUNAS_ATIVOS):
+                                    detalhe_log = f"Arquivo '{arquivo_up.name}' enviado. Novos: +{qtd_novos} | Atualizados: {qtd_atualizados}."
+                                    registrar_log_auditoria("UPLOAD PLANILHA", arquivo_up.name, detalhe_log)
+                                    st.session_state.resumo_ultima_operacao = {
+                                        'titulo': f"Envio da planilha '{arquivo_up.name}' concluído!",
+                                        'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                                        'qtd_antes': qtd_antes,
+                                        'novos': qtd_novos,
+                                        'atualizados': qtd_atualizados,
+                                        'qtd_depois': qtd_depois
+                                    }
+                                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao ler o arquivo Excel: {e}")
                     
-                    st.markdown("##### 📋 Resumo Pré-Envio da Planilha:")
-                    c_p1, c_p2, c_p3, c_p4 = st.columns(4)
-                    c_p1.metric("Base Atual (Antes)", qtd_antes)
-                    c_p2.metric("Novos Cadastros", f"+{qtd_novos}")
-                    c_p3.metric("Serão Atualizados", qtd_atualizados)
-                    c_p4.metric("Projeção (Depois)", qtd_depois)
+        with col_up2:
+            st.markdown("##### 👥 Planilha de Colaboradores")
+            arquivo_emp = st.file_uploader("Arraste a planilha de COLABORADORES (.xlsx)", type=["xlsx"], key="up_emp")
+            if arquivo_emp:
+                try:
+                    df_emp_up = pd.read_excel(arquivo_emp)
+                    df_emp_up.columns = [normalizar_nome_coluna(c) for c in df_emp_up.columns]
                     
-                    st.write(f"**Pré-visualização ({len(df_up)} linhas válidas na planilha):**")
-                    st.dataframe(df_up.head(5), use_container_width=True)
-                    
-                    if st.button("🚀 Confirmar e Subir para a Nuvem", type="primary"):
-                        with st.spinner("A enviar dados para o Supabase e a atualizar o sistema..."):
-                            if salvar_dados_massa('ativos_master', df_up, COLUNAS_ATIVOS):
-                                detalhe_log = f"Arquivo '{arquivo_up.name}' enviado. Novos: +{qtd_novos} | Atualizados: {qtd_atualizados}."
-                                registrar_log_auditoria("UPLOAD PLANILHA", arquivo_up.name, detalhe_log)
-                                
-                                st.session_state.resumo_ultima_operacao = {
-                                    'titulo': f"Envio da planilha '{arquivo_up.name}' concluído com sucesso!",
-                                    'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
-                                    'qtd_antes': qtd_antes,
-                                    'novos': qtd_novos,
-                                    'atualizados': qtd_atualizados,
-                                    'qtd_depois': qtd_depois
-                                }
-                                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao ler o arquivo Excel: {e}")
-                
-        st.divider()
-        st.subheader("👥 Carga de Base de Colaboradores (Para Movimentação e Termos)")
-        arquivo_emp = st.file_uploader("Arraste a planilha de COLABORADORES (.xlsx)", type=["xlsx"], key="up_emp")
-        if arquivo_emp:
-            try:
-                df_emp_up = pd.read_excel(arquivo_emp)
-                df_emp_up.columns = [normalizar_nome_coluna(c) for c in df_emp_up.columns]
-                
-                if 'matricula' not in df_emp_up.columns:
-                    st.error("A coluna obrigatória 'matricula' não foi encontrada.")
-                else:
-                    df_emp_up = df_emp_up.dropna(subset=['matricula'])
-                    df_emp_up['matricula'] = df_emp_up['matricula'].astype(str).str.strip()
-                    df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
-                    
-                    if st.button("🚀 Subir Base de Colaboradores", type="primary"):
-                        with st.spinner("Atualizando colaboradores no Supabase..."):
-                            if salvar_dados_massa('empregados', df_emp_up, COLUNAS_EMPREGADOS):
-                                registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
-                                st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
-                                st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao ler arquivo: {e}")
-                
+                    if 'matricula' not in df_emp_up.columns:
+                        st.error("A coluna obrigatória 'matricula' não foi encontrada.")
+                    else:
+                        df_emp_up = df_emp_up.dropna(subset=['matricula'])
+                        df_emp_up['matricula'] = df_emp_up['matricula'].astype(str).str.strip()
+                        df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
+                        
+                        st.caption(f"**{len(df_emp_up)}** colaboradores prontos para sincronização.")
+                        st.dataframe(df_emp_up.head(3), use_container_width=True)
+                        
+                        if st.button("🚀 Subir Base de Colaboradores", type="primary"):
+                            with st.spinner("Atualizando colaboradores no Supabase..."):
+                                if salvar_dados_massa('empregados', df_emp_up, COLUNAS_EMPREGADOS):
+                                    registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
+                                    st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
+                                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao ler arquivo: {e}")
+
+    # --- ABA DE EXCLUSÃO POR SELEÇÃO DE LINHAS (MASTER) ---
     if st.session_state.perfil == 'Master':
         with abas[5]:
-            st.subheader("❌ Exclusão Permanente de Ativo")
-            st.warning("Atenção: Esta ação removerá o ativo do banco de dados definitivamente. Apenas o Gestor (Master) tem acesso a esta aba.")
-            pat_del = st.text_input("Digite o Patrimônio ou Nº de Série exato para exclusão:")
-            if st.button("🗑️ Confirmar Exclusão", type="primary"):
-                if pat_del.strip():
-                    ativo_del = buscar_ativo(pat_del, df_ativos)
-                    if not ativo_del.empty:
-                        pat_real = ativo_del.iloc[0]['patrimonio']
-                        try:
-                            supabase.table('ativos_master').delete().eq('patrimonio', pat_real).execute()
-                            registrar_log_auditoria("EXCLUSÃO ATIVO", pat_real, "Ativo removido permanentemente pelo Master.")
-                            st.cache_data.clear()
-                            st.success(f"✅ Ativo {pat_real} excluído permanentemente da nuvem!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao excluir: {e}")
-                    else:
-                        st.error("Patrimônio ou Série não encontrado na base mestra.")
+            st.subheader("❌ Exclusão de Registos por Seleção (Acesso Restrito Master)")
+            st.warning("⚠️ Marque a caixa **'🗑️ Excluir?'** nas linhas que deseja remover permanentemente do banco de dados e clique no botão de confirmação abaixo.")
+            
+            tipo_exclusao = st.radio("Selecione a Tabela para Exclusão:", ["📦 Ativos (Equipamentos)", "👥 Colaboradores (Empregados)"], horizontal=True)
+            
+            if tipo_exclusao.startswith("📦"):
+                if not df_ativos.empty:
+                    busca_del = st.text_input("🔍 Filtrar ativos antes de marcar (Patrimônio, Série, Equipamento ou Cautela):")
+                    df_del_view = df_ativos[COLUNAS_ATIVOS].copy()
+                    if busca_del.strip():
+                        t_del = busca_del.strip().lower()
+                        mask_del = df_del_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_del, na=False)).any(axis=1)
+                        df_del_view = df_del_view[mask_del]
+                        
+                    df_del_view.insert(0, "Excluir", False)
+                    
+                    df_editado = st.data_editor(
+                        df_del_view,
+                        hide_index=True,
+                        use_container_width=True,
+                        disabled=[c for c in df_del_view.columns if c != "Excluir"],
+                        column_config={
+                            "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)
+                        },
+                        key="editor_del_ativos"
+                    )
+                    
+                    selecionados = df_editado[df_editado["Excluir"] == True]
+                    if not selecionados.empty:
+                        st.error(f"⚠️ Você selecionou **{len(selecionados)} ativo(s)** para exclusão definitiva: `{', '.join(selecionados['patrimonio'].astype(str).tolist())}`")
+                        if st.button(f"🗑️ Confirmar Exclusão de {len(selecionados)} Ativo(s)", type="primary"):
+                            try:
+                                lista_pats = selecionados['patrimonio'].astype(str).tolist()
+                                for p_del in lista_pats:
+                                    supabase.table('ativos_master').delete().eq('patrimonio', p_del).execute()
+                                registrar_log_auditoria("EXCLUSÃO EM LOTE (ATIVOS)", f"{len(lista_pats)} itens", f"Patrimônios excluídos pelo Master: {', '.join(lista_pats)}")
+                                st.cache_data.clear()
+                                st.success(f"✅ {len(lista_pats)} ativo(s) excluído(s) permanentemente!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao excluir ativos: {e}")
                 else:
-                    st.error("Preencha o campo para exclusão.")
+                    st.info("A tabela de ativos está vazia.")
+            else:
+                if not df_empregados.empty:
+                    busca_emp_del = st.text_input("🔍 Filtrar colaborador por Nome ou Matrícula:")
+                    df_emp_view = df_empregados[COLUNAS_EMPREGADOS].copy()
+                    if busca_emp_del.strip():
+                        t_edel = busca_emp_del.strip().lower()
+                        mask_edel = df_emp_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_edel, na=False)).any(axis=1)
+                        df_emp_view = df_emp_view[mask_edel]
+                        
+                    df_emp_view.insert(0, "Excluir", False)
+                    
+                    df_emp_editado = st.data_editor(
+                        df_emp_view,
+                        hide_index=True,
+                        use_container_width=True,
+                        disabled=[c for c in df_emp_view.columns if c != "Excluir"],
+                        column_config={
+                            "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)
+                        },
+                        key="editor_del_emp"
+                    )
+                    
+                    emp_selecionados = df_emp_editado[df_emp_editado["Excluir"] == True]
+                    if not emp_selecionados.empty:
+                        st.error(f"⚠️ Você selecionou **{len(emp_selecionados)} colaborador(es)** para exclusão: `{', '.join(emp_selecionados['nome'].astype(str).tolist())}`")
+                        if st.button(f"🗑️ Confirmar Exclusão de {len(emp_selecionados)} Colaborador(es)", type="primary"):
+                            try:
+                                lista_mats = emp_selecionados['matricula'].astype(str).tolist()
+                                for m_del in lista_mats:
+                                    supabase.table('empregados').delete().eq('matricula', m_del).execute()
+                                registrar_log_auditoria("EXCLUSÃO COLABORADORES", f"{len(lista_mats)} itens", f"Matrículas excluídas: {', '.join(lista_mats)}")
+                                st.cache_data.clear()
+                                st.success(f"✅ {len(lista_mats)} colaborador(es) removido(s) com sucesso!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao excluir colaboradores: {e}")
+                else:
+                    st.info("A tabela de colaboradores está vazia.")
 
     exibir_marca_desenvolvedor()
 
@@ -751,9 +876,9 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
                 origem = st.text_input("Origem (Local Atual)", value=str(cautela_atual))
             with c2:
                 destino = st.text_input("Destino / Novo Responsável", value=emp_dict.get('nome', ''))
-                projeto = st.text_input("Projeto (Destino)", value=emp_dict.get('projeto', ''))
+                projeto = st.text_input("Projeto (Destino)", value=emp_dict.get('projeto', registro_atual.get('projeto', '')))
             with c3:
-                coordenacao = st.text_input("Coordenação (Destino)", value=emp_dict.get('unidade', ''))
+                coordenacao = st.text_input("Coordenação (Destino)", value=emp_dict.get('unidade', registro_atual.get('coordenacao', '')))
                 matricula_col = st.text_input("Matrícula Solicitante", value=matricula_busca.strip())
                 
             c4, c5 = st.columns(2)
@@ -795,8 +920,7 @@ elif selecao_perfil and selecao_perfil.startswith("2"):
                         st.error(f"Erro ao salvar solicitação: {e}")
                 else:
                     st.error("O campo de Destino / Novo Responsável deve estar preenchido.")
-
-# ==========================================
+                    # ==========================================
 # MÓDULO 3: CENTRAL DE VALIDAÇÕES (ALMOXARIFADO)
 # ==========================================
 elif selecao_perfil and selecao_perfil.startswith("3"):
@@ -834,7 +958,8 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                 with st.form("form_validacao_pendente"):
                     colA, colB = st.columns(2)
                     with colA: 
-                        novo_status = st.selectbox("Novo Status no Sistema:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"], index=0 if 'Almoxarifado' in mov_atual.get('destino', '') else 1)
+                        idx_sugerido = 0 if 'ALMOX' in str(mov_atual.get('destino', '')).upper() else 1
+                        novo_status = st.selectbox("Novo Status no Sistema:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"], index=idx_sugerido)
                     with colB: 
                         nova_cautela = st.text_input("Atualizar Cautela (Destino Real)", value=str(mov_atual.get('destino', '')))
                     
@@ -861,7 +986,10 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                                 dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
                                 supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_selecionado).execute()
                                 
-                                if str(mov_atual.get('tipo_mov', '')).startswith("MOV-01"):
+                                tipo_m = str(mov_atual.get('tipo_mov', ''))
+                                
+                                # Gatilho 1: MOV-01 envia para Fila de Impressão
+                                if tipo_m.startswith("MOV-01"):
                                     mat_solic = str(mov_atual.get('matricula_solicitante', '')).strip()
                                     match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_solic] if not df_empregados.empty else pd.DataFrame()
                                     emp = match_emp.iloc[0].fillna("").to_dict() if not match_emp.empty else {}
@@ -882,8 +1010,19 @@ elif selecao_perfil and selecao_perfil.startswith("3"):
                                     }
                                     supabase.table('termos').insert(novo_termo).execute()
                                     registrar_log_auditoria("TERMO NA FILA", pat_real, f"Termo {id_termo} gerado e enviado para Fila de Impressão.")
-                                    
-                                    st.session_state.msg_sucesso = "✅ Validação concluída! O Termo de Responsabilidade foi enviado para a Fila de Impressão (abaixo)."
+                                    st.session_state.msg_sucesso = "✅ Validação concluída! O Termo de Responsabilidade foi enviado para a Fila de Impressão (Módulo 4)."
+                                
+                                # Gatilho 2: MOV-02 (Devolução ao Almoxarifado) encerra termos ativos automaticamente
+                                elif tipo_m.startswith("MOV-02"):
+                                    termos_abertos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
+                                    if not termos_abertos.empty:
+                                        for _, t_row in termos_abertos.iterrows():
+                                            supabase.table('termos').update({
+                                                'data_baixa': datetime.now().strftime('%Y-%m-%d'),
+                                                'status_termo': 'Encerrado'
+                                            }).eq('id_termo', t_row['id_termo']).execute()
+                                        registrar_log_auditoria("BAIXA AUTOMÁTICA TERMO", pat_real, "Termo encerrado automaticamente na validação de devolução (MOV-02).")
+                                    st.session_state.msg_sucesso = "✅ Devolução validada! Ativo disponível no Almoxarifado e Termo anterior baixado automaticamente."
                                 else:
                                     st.session_state.msg_sucesso = "✅ Ciclo de movimentação fechado! Dashboard atualizado em tempo real."
                                 
@@ -941,7 +1080,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
     if st.session_state.get('pdf_termo_pronto'):
         st.success(st.session_state.pdf_termo_pronto.get('msg', "✅ Termo gerado com sucesso!"))
         st.download_button(
-            label="📥 Baixar Termo PDF", 
+            label="📥 Baixar Termo PDF (Modelo Oficial PROCISA)", 
             data=st.session_state.pdf_termo_pronto['bytes'], 
             file_name=st.session_state.pdf_termo_pronto['nome_arquivo'], 
             mime='application/pdf',
@@ -952,20 +1091,20 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
             st.rerun()
         st.divider()
 
-    aba_termos, aba_diverg = st.tabs(["Emissão e Baixa de Termos", "Tratar Divergências"])
+    aba_termos, aba_diverg = st.tabs(["Emissão, Fila e 2ª Via de Termos", "Tratar Divergências"])
     
     with aba_termos:
         # --- FILA DE IMPRESSÃO ---
         st.markdown("###### 🖨️ Fila de Impressão (Termos Pendentes)")
-        st.caption("Termos gerados automaticamente pelas Movimentações (MOV-01) e que aguardam impressão e assinatura.")
+        st.caption("Termos gerados automaticamente pelas Movimentações (MOV-01) que aguardam impressão e assinatura.")
         termos_pendentes = df_termos[df_termos['status_termo'] == 'Pendente Impressão'] if not df_termos.empty else pd.DataFrame()
         
         if not termos_pendentes.empty:
-            st.dataframe(termos_pendentes[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'data_emissao']], use_container_width=True)
+            st.dataframe(termos_pendentes[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao']], use_container_width=True)
             
             col_f1, col_f2 = st.columns([3, 1])
             with col_f1:
-                id_imp = st.selectbox("Selecione o Termo para Imprimir:", termos_pendentes['id_termo'].tolist())
+                id_imp = st.selectbox("Selecione o Termo da Fila para Imprimir:", termos_pendentes['id_termo'].tolist())
             with col_f2:
                 st.write("")
                 st.write("")
@@ -978,7 +1117,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                     emp_match = df_empregados[df_empregados['matricula'].astype(str) == str(mat)] if not df_empregados.empty else pd.DataFrame()
                     
                     if not ativo_match.empty:
-                        emp = emp_match.iloc[0].to_dict() if not emp_match.empty else {}
+                        emp = emp_match.iloc[0].fillna("").to_dict() if not emp_match.empty else {}
                         resp_nome = t_info['responsavel']
                         resp_cpf = emp.get('cpf', '')
                         resp_rg = emp.get('rg', '')
@@ -992,11 +1131,12 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                         try:
                             supabase.table('termos').update({'status_termo': 'Ativo'}).eq('id_termo', id_imp).execute()
                             st.cache_data.clear()
+                            registrar_log_auditoria("IMPRESSÃO TERMO FILA", pat_real, f"Termo {id_imp} impresso e ativado.")
                             
                             st.session_state.pdf_termo_pronto = {
                                 'bytes': PDFbyte,
-                                'nome_arquivo': f"Termo_{pat_real}.pdf",
-                                'msg': f"✅ Termo {id_imp} gerado e ativado no sistema!"
+                                'nome_arquivo': f"Termo_PROCISA_{pat_real}.pdf",
+                                'msg': f"✅ Termo {id_imp} gerado e ativado no sistema! Clique abaixo para baixar."
                             }
                             st.rerun()
                         except Exception as e:
@@ -1008,13 +1148,16 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
             
         st.divider()
 
-        # --- AÇÕES MANUAIS (AVULSAS E BAIXA) ---
-        opcao_termo = st.radio("Outras Ações:", ["Encerrar Termo (Devolução)", "Emitir Novo Termo Excepcional"], horizontal=True)
+        # --- AÇÕES MANUAIS (BAIXA, 2ª VIA E EMISSÃO EXCECIONAL) ---
+        opcao_termo = st.radio(
+            "Outras Operações de Termos:", 
+            ["Encerrar Termo (Devolução)", "🔄 Emitir 2ª Via de Termo", "Emitir Novo Termo Excepcional"], 
+            horizontal=True
+        )
         
         if opcao_termo == "Emitir Novo Termo Excepcional":
             st.info("Utilize esta opção apenas para emitir termos manuais fora do fluxo padrão de movimentação.")
-            st.markdown("###### 🔍 Auto-Preenchimento de Colaborador")
-            matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados:")
+            matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados do colaborador:")
             
             emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
             if matricula_busca.strip() and not df_empregados.empty:
@@ -1026,7 +1169,6 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                     st.warning("⚠️ Matrícula não encontrada na base. Preencha os campos abaixo manualmente.")
             
             with st.form("form_termo_avulso"):
-                st.markdown("###### 📝 Detalhes do Documento")
                 colA, colB = st.columns(2)
                 with colA:
                     patrimonio_termo = st.text_input("Patrimônio ou Série do Equipamento:")
@@ -1070,7 +1212,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                         
                         st.session_state.pdf_termo_pronto = {
                             'bytes': PDFbyte,
-                            'nome_arquivo': f"Termo_{pat_real}.pdf",
+                            'nome_arquivo': f"Termo_PROCISA_{pat_real}.pdf",
                             'msg': "✅ Termo registrado e ativado na nuvem!"
                         }
                         st.rerun()
@@ -1078,6 +1220,40 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                         st.error(f"Erro ao salvar termo: {e}")
                 else:
                     st.error("Equipamento não localizado. Verifique o patrimônio/série.")
+                    
+        elif opcao_termo == "🔄 Emitir 2ª Via de Termo":
+            if not df_termos.empty:
+                opcoes_2via = df_termos.apply(lambda r: f"{r['id_termo']} | Pat: {r['patrimonio']} | {r['responsavel']} ({r['status_termo']})", axis=1).tolist()
+                sel_2via = st.selectbox("Selecione o Termo para Reimpressão (2ª Via):", opcoes_2via)
+                if st.button("🖨️ Gerar 2ª Via em PDF", type="primary"):
+                    id_2via = sel_2via.split(" | ")[0]
+                    t_info = df_termos[df_termos['id_termo'] == id_2via].iloc[0]
+                    pat_real = t_info['patrimonio']
+                    mat = t_info['matricula']
+                    
+                    ativo_match = buscar_ativo(pat_real, df_ativos)
+                    emp_match = df_empregados[df_empregados['matricula'].astype(str) == str(mat)] if not df_empregados.empty else pd.DataFrame()
+                    
+                    if not ativo_match.empty:
+                        emp = emp_match.iloc[0].fillna("").to_dict() if not emp_match.empty else {}
+                        caminho_pdf = gerar_termo_pdf(
+                            pat_real, t_info['responsavel'], mat, 
+                            emp.get('cpf', ''), emp.get('rg', ''), 
+                            emp.get('projeto', ativo_match.iloc[0].get('projeto', '')), 
+                            t_info['unidade'], ativo_match
+                        )
+                        with open(caminho_pdf, "rb") as pdf_file:
+                            PDFbyte = pdf_file.read()
+                        st.session_state.pdf_termo_pronto = {
+                            'bytes': PDFbyte,
+                            'nome_arquivo': f"2Via_Termo_PROCISA_{pat_real}.pdf",
+                            'msg': f"✅ 2ª Via do Termo {id_2via} gerada com sucesso!"
+                        }
+                        st.rerun()
+                    else:
+                        st.error("Ativo vinculado não foi encontrado na base mestra.")
+            else:
+                st.info("Nenhum termo registado no histórico.")
         else:
             pat_baixa = st.text_input("Patrimônio ou Série devolvido:")
             if st.button("Baixar Termo Ativo", type="primary"):
@@ -1114,6 +1290,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
         with c1:
             st.markdown("###### Reportar Nova Divergência")
             pat_div = st.text_input("Patrimônio com Divergência:")
+            obs_abertura = st.text_input("Descrição do Problema (Ex: Falta fonte, Série divergente):")
             if st.button("🚨 Abrir Alerta e Segregar Ativo", type="secondary"):
                 if pat_div.strip():
                     id_div = f"DIV-{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -1124,12 +1301,12 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
                         'tipo_divergencia': 'Inconsistência Relatada pelo Almoxarifado', 
                         'status_resolucao': 'Pendente', 
                         'analista_responsavel': st.session_state.nome_real, 
-                        'observacoes': 'Ativo segregado manualmente.'
+                        'observacoes': obs_abertura.strip() if obs_abertura.strip() else 'Ativo segregado manualmente.'
                     }
                     try:
                         supabase.table('divergencias').insert(nova_div).execute()
                         st.cache_data.clear()
-                        registrar_log_auditoria("DIVERGÊNCIA ABERTA", pat_div.strip(), "Abertura manual de divergência.")
+                        registrar_log_auditoria("DIVERGÊNCIA ABERTA", pat_div.strip(), f"Abertura manual: {obs_abertura}")
                         st.success("Alerta criado com sucesso!")
                         st.rerun()
                     except Exception as e:
@@ -1138,6 +1315,7 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
         with c2:
             st.markdown("###### Resolver Pendência")
             if not pendentes.empty:
+                st.dataframe(pendentes[['id_divergencia', 'patrimonio', 'observacoes']], use_container_width=True)
                 id_div_selecionada = st.selectbox("Selecione a Divergência:", pendentes['id_divergencia'].tolist())
                 obs = st.text_area("Justificativa / Ação Tomada:")
                 analista = st.text_input("Analista Responsável:", value=st.session_state.nome_real)
@@ -1173,9 +1351,19 @@ elif selecao_perfil and selecao_perfil.startswith("4"):
 elif selecao_perfil and selecao_perfil.startswith("5"):
     st.header("🔬 Laboratório Técnico")
     patrimonio_lab = st.text_input("Patrimônio ou Série em Análise:")
-    resultado = st.radio("Parecer Técnico:", ["APTO", "APTO COM RESSALVA", "REPARADO", "CALIBRADO", "REPROVADO", "INSERVÍVEL"])
     
-    if st.button("Atualizar Base", type="primary"):
+    if patrimonio_lab.strip():
+        ativo_match = buscar_ativo(patrimonio_lab, df_ativos)
+        if not ativo_match.empty:
+            reg_lab = ativo_match.iloc[0]
+            st.info(f"**Equipamento:** {reg_lab.get('equipamento')} - {reg_lab.get('marca')} {reg_lab.get('modelo')} | **Condição Atual:** {reg_lab.get('condicoes_para_uso')}")
+        else:
+            st.warning("⚠️ Patrimônio ou série não localizado.")
+            
+    resultado = st.radio("Parecer Técnico:", ["APTO", "APTO COM RESSALVA", "REPARADO", "CALIBRADO", "REPROVADO", "INSERVÍVEL"], horizontal=True)
+    acessorios_lab = st.text_input("Atualizar Observação / Acessórios (Opcional):")
+    
+    if st.button("Atualizar Base com Parecer Técnico", type="primary"):
         ativo_match = buscar_ativo(patrimonio_lab, df_ativos)
         
         if not ativo_match.empty:
@@ -1189,6 +1377,8 @@ elif selecao_perfil and selecao_perfil.startswith("5"):
                 'status_sistema': novo_status,
                 'atualizado_em': datetime.now().strftime('%Y-%m-%d')
             }
+            if acessorios_lab.strip():
+                dados_update_lab['acessorios'] = acessorios_lab.strip()
             
             try:
                 supabase.table('ativos_master').update(dados_update_lab).eq('patrimonio', pat_real).execute()
@@ -1351,11 +1541,11 @@ elif selecao_perfil and selecao_perfil.startswith("7"):
         
     col_a1, col_a2, col_a3 = st.columns(3)
     total_ev = len(df_auditoria)
-    total_uploads = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('UPLOAD|CADASTRO', na=False)]) if not df_auditoria.empty else 0
-    total_movs = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('MOV|CONFERÊNCIA|TERMO', na=False)]) if not df_auditoria.empty else 0
+    total_uploads = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('UPLOAD|CADASTRO|EXCLUSÃO', na=False)]) if not df_auditoria.empty else 0
+    total_movs = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('MOV|CONFERÊNCIA|TERMO|VALIDAÇÃO', na=False)]) if not df_auditoria.empty else 0
     
     col_a1.metric("Total de Eventos Auditados", total_ev)
-    col_a2.metric("Cargas / Cadastros Realizados", total_uploads)
+    col_a2.metric("Cargas / Cadastros / Exclusões", total_uploads)
     col_a3.metric("Operações de Campo / Almox.", total_movs)
     
     st.divider()
