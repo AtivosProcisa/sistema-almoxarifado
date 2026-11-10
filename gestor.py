@@ -6,26 +6,53 @@ from nuvem import (
     supabase, COLUNAS_ATIVOS, COLUNAS_MOV, COLUNAS_TERMOS, COLUNAS_DIVERG, COLUNAS_EMPREGADOS,
     normalizar_nome_coluna, salvar_dados_massa, registrar_log_auditoria,
     calcular_uso_supabase, exibir_marca_desenvolvedor, matricula_valida,
-    limpar_texto_matricula, expurgar_linhas_nulas_nuvem
+    limpar_texto_matricula, expurgar_linhas_nulas_nuvem,
+    carregar_preferencias_colunas, salvar_preferencias_colunas
 )
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel
 
 # ==========================================
-# FUNÇÕES DE GATILHO PARA MEMÓRIA (SHOW/HIDE)
+# FUNÇÕES DE GATILHO PARA SALVAR NA NUVEM
 # ==========================================
+def inicializar_prefs_nuvem():
+    if 'prefs_carregadas_nuvem' not in st.session_state:
+        prefs = carregar_preferencias_colunas()
+        st.session_state.saved_cols_inv = prefs['inv']
+        st.session_state.saved_cols_mov = prefs['mov']
+        st.session_state.saved_cols_trm = prefs['trm']
+        st.session_state.prefs_carregadas_nuvem = True
+
 def update_cols_inv():
     st.session_state.saved_cols_inv = st.session_state.ms_inv_key
+    salvar_preferencias_colunas(
+        st.session_state.saved_cols_inv,
+        st.session_state.saved_cols_mov,
+        st.session_state.saved_cols_trm
+    )
 
 def update_cols_mov():
     st.session_state.saved_cols_mov = st.session_state.ms_mov_key
+    salvar_preferencias_colunas(
+        st.session_state.saved_cols_inv,
+        st.session_state.saved_cols_mov,
+        st.session_state.saved_cols_trm
+    )
 
 def update_cols_trm():
     st.session_state.saved_cols_trm = st.session_state.ms_trm_key
+    salvar_preferencias_colunas(
+        st.session_state.saved_cols_inv,
+        st.session_state.saved_cols_mov,
+        st.session_state.saved_cols_trm
+    )
 
 # ==========================================
 # MÓDULO 1: DASHBOARD E CONCILIAÇÃO
 # ==========================================
 def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados):
+    # Garante que a última configuração salva na nuvem seja carregada mesmo após Logout ou F5
+    inicializar_prefs_nuvem()
+
     st.header("📊 Painel Gerencial e Conciliação")
     
     if st.session_state.get('resumo_ultima_operacao'):
@@ -79,14 +106,6 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
         
     abas = st.tabs(abas_dashboard)
     
-    # === VARIÁVEIS DE SEGURANÇA (PERSISTÊNCIA PÓS-LOGOUT) ===
-    if 'saved_cols_inv' not in st.session_state:
-        st.session_state.saved_cols_inv = list(COLUNAS_ATIVOS)
-    if 'saved_cols_mov' not in st.session_state:
-        st.session_state.saved_cols_mov = list(COLUNAS_MOV)
-    if 'saved_cols_trm' not in st.session_state:
-        st.session_state.saved_cols_trm = list(COLUNAS_TERMOS)
-    
     # --- ABA 0: INVENTÁRIO GERAL ---
     with abas[0]:
         with st.expander("👁️ Filtros e Colunas Visíveis", expanded=False):
@@ -100,14 +119,26 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 f_coord = st.selectbox("Filtrar Coordenação:", lista_coord)
             with cf3:
                 f_busca = st.text_input("Buscar (Patrimônio, Série, Equipamento ou Cautela):")
-                
-            st.multiselect(
-                "Ocultar ou Mostrar Colunas (Inventário):",
-                options=COLUNAS_ATIVOS,
-                default=st.session_state.saved_cols_inv,
-                key="ms_inv_key",
-                on_change=update_cols_inv
-            )
+            
+            c_sh1, c_sh2 = st.columns([5, 1])
+            with c_sh2:
+                st.write("")
+                if st.button("🔄 Restaurar Padrão", key="btn_reset_inv", use_container_width=True):
+                    st.session_state.saved_cols_inv = list(COLUNAS_ATIVOS)
+                    salvar_preferencias_colunas(
+                        st.session_state.saved_cols_inv,
+                        st.session_state.saved_cols_mov,
+                        st.session_state.saved_cols_trm
+                    )
+                    st.rerun()
+            with c_sh1:
+                st.multiselect(
+                    "Ocultar ou Mostrar Colunas (Salvo automaticamente na nuvem):",
+                    options=COLUNAS_ATIVOS,
+                    default=st.session_state.saved_cols_inv,
+                    key="ms_inv_key",
+                    on_change=update_cols_inv
+                )
 
         cols_para_exibir = st.session_state.saved_cols_inv if st.session_state.saved_cols_inv else COLUNAS_ATIVOS
         
