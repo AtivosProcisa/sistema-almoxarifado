@@ -61,13 +61,17 @@ def normalizar_nome_coluna(col):
     return texto_sem_acento.replace(' ', '_').replace('-', '_')
 
 def matricula_valida(val):
-    """Verifica se uma matrícula não é vazia nem 'none'/'nan'."""
+    """Verifica se uma chave (patrimônio ou matrícula) não é nula, vazia nem 'none'/'nan'."""
+    if val is None or pd.isna(val):
+        return False
     texto = str(val).strip()
     if texto.endswith('.0'):
         texto = texto[:-2]
     return texto.lower() not in VALUES_INVALIDOS
 
 def limpar_texto_matricula(val):
+    if val is None or pd.isna(val):
+        return ""
     texto = str(val).strip()
     if texto.endswith('.0'):
         texto = texto[:-2]
@@ -104,17 +108,32 @@ def registrar_log_auditoria(acao, alvo, detalhes):
     except Exception:
         pass
 
-def expurgar_matriculas_none_nuvem():
-    """Remove fisicamente do Supabase qualquer colaborador ou registo com matrícula 'none', 'nan' ou vazia."""
-    removidos = 0
+def expurgar_linhas_nulas_nuvem():
+    """Remove silenciosamente do Supabase linhas travadas com NULL ou 'None' em ativos_master e empregados."""
+    # 1. Remove linhas onde a coluna está realmente NULL no PostgreSQL
+    try:
+        supabase.table('ativos_master').delete().is_('patrimonio', 'null').execute()
+    except Exception:
+        pass
+    try:
+        supabase.table('empregados').delete().is_('matricula', 'null').execute()
+    except Exception:
+        pass
+    try:
+        supabase.table('ativos_master').delete().is_('equipamento', 'null').is_('marca', 'null').execute()
+    except Exception:
+        pass
+
+    # 2. Remove linhas onde foi gravado texto 'None', 'nan' ou vazio
     for val_lixo in ["None", "none", "NONE", "nan", "NaN", "null", "NULL", ""]:
         try:
-            res = supabase.table('empregados').delete().eq('matricula', val_lixo).execute()
-            if res.data:
-                removidos += len(res.data)
+            supabase.table('ativos_master').delete().eq('patrimonio', val_lixo).execute()
         except Exception:
             pass
-    return removidos
+        try:
+            supabase.table('empregados').delete().eq('matricula', val_lixo).execute()
+        except Exception:
+            pass
 
 @st.cache_data(ttl=5)
 def carregar_dados():
@@ -131,27 +150,38 @@ def carregar_dados():
         except Exception:
             df_empregados = pd.DataFrame(columns=COLUNAS_EMPREGADOS)
 
-        # Limpeza automática de matrículas "None" / inválidas na tabela de empregados
-        if not df_empregados.empty and 'matricula' in df_empregados.columns:
-            mask_invalida = ~df_empregados['matricula'].apply(matricula_valida)
-            if mask_invalida.any():
-                expurgar_matriculas_none_nuvem()
-                df_empregados = df_empregados[~mask_invalida].copy()
-            df_empregados['matricula'] = df_empregados['matricula'].apply(limpar_texto_matricula)
-
         df_ativos = pd.DataFrame(ativos_res.data) if ativos_res.data else pd.DataFrame(columns=COLUNAS_ATIVOS)
         df_mov = pd.DataFrame(mov_res.data) if mov_res.data else pd.DataFrame(columns=COLUNAS_MOV)
         df_termos = pd.DataFrame(termos_res.data) if termos_res.data else pd.DataFrame(columns=COLUNAS_TERMOS)
         df_diverg_bruto = pd.DataFrame(diverg_res.data) if diverg_res.data else pd.DataFrame(columns=COLUNAS_DIVERG)
         df_usuarios = pd.DataFrame(usuarios_res.data) if usuarios_res.data else pd.DataFrame(columns=COLUNAS_USUARIOS)
         
+        precisa_expurgo = False
+
+        # Verifica e filtra linhas "None"/NULL na tabela de empregados
+        if not df_empregados.empty and 'matricula' in df_empregados.columns:
+            mask_emp_invalida = ~df_empregados['matricula'].apply(matricula_valida)
+            if mask_emp_invalida.any():
+                precisa_expurgo = True
+                df_empregados = df_empregados[~mask_emp_invalida].copy()
+            df_empregados['matricula'] = df_empregados['matricula'].apply(limpar_texto_matricula)
+
         for col in COLUNAS_ATIVOS:
             if col not in df_ativos.columns:
                 df_ativos[col] = "Disponível" if col == 'status_sistema' else ""
                 
+        # Verifica e filtra linhas "None"/NULL travadas na tabela de ativos_master
         if not df_ativos.empty:
-            df_ativos['patrimonio'] = df_ativos['patrimonio'].astype(str).str.strip()
-            df_ativos = df_ativos[~df_ativos['patrimonio'].str.lower().isin(VALUES_INVALIDOS)].copy()
+            mask_ativo_invalido = ~df_ativos['patrimonio'].apply(matricula_valida)
+            if mask_ativo_invalido.any():
+                precisa_expurgo = True
+                df_ativos = df_ativos[~mask_ativo_invalido].copy()
+            df_ativos['patrimonio'] = df_ativos['patrimonio'].apply(limpar_texto_matricula)
+            # Substitui qualquer None residual nas outras colunas por texto vazio para exibição limpa
+            df_ativos = df_ativos.fillna("").replace({"None": "", "none": "", "nan": "", "NaN": "", "null": ""})
+
+        if precisa_expurgo:
+            expurgar_linhas_nulas_nuvem()
 
         # Higieniza exibição de matrículas "none" em movimentações e termos
         if not df_mov.empty and 'matricula_solicitante' in df_mov.columns:
