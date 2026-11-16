@@ -115,7 +115,7 @@ def update_cols_fer():
     )
 
 # ==========================================
-# F1: PAINEL GERENCIAL (Métricas Atualizadas - Item 04 e 05)
+# F1: PAINEL GERENCIAL (Métricas Atualizadas)
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -135,14 +135,12 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 
         mask_ativo_fisico = ~st_op.isin(['BAIXADO', 'TRANSFERIDO'])
         
-        # 04 - Contabilizar pelo campo QUANTIDADE da linha, não por linha única
         total_fisico = int(qtd_series[mask_ativo_fisico].sum())
         
         mask_disp = (st_op == 'DISPONÍVEL') & (cd_fi.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))
         s_disp = int(qtd_series[mask_disp].sum())
         s_cautela = int(qtd_series[st_op == 'EM CAUTELA'].sum())
         
-        # 05 - Ociosidade em destaque (Simplificando painel inferior)
         s_ocioso = int(qtd_series[(dias_ociosos > 90) & mask_ativo_fisico].sum())
     else:
         total_fisico = s_disp = s_cautela = s_ocioso = 0
@@ -612,7 +610,6 @@ def render_inspecao_movimentacao_fer(df_fer):
             with st.form("form_mov_fer_avulso"):
                 cm1, cm2, cm3 = st.columns(3)
                 with cm1:
-                    # 04 - Requerir a Quantidade Exata que está a ser movimentada
                     qtd_mover = st.number_input("Quantidade a Movimentar *", min_value=1, max_value=qtd_lote, value=1, help="Se movimentar menos que o total, o lote será separado mantendo o saldo correto no Almoxarifado.")
                     t_mov = st.selectbox("Tipo de Movimento:", LISTA_TIPOS_MOV_FER)
                     loc_dest = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER)
@@ -688,7 +685,7 @@ def render_inspecao_movimentacao_fer(df_fer):
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F3: CONTROLE DE CAUTELA (ENTREGA PARCIAL DE LOTE)
+# F3: CONTROLE DE CAUTELA (ENTREGA PARCIAL MÚLTIPLA)
 # ==========================================
 def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
     st.header("👷 Controle de Cautela (Entrega e Devolução de Ferramentas)")
@@ -724,13 +721,13 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
         else:
             c_b1, c_b2 = st.columns(2)
             with c_b1:
+                # 01/02 - Busca Múltipla Inteligente (PROCV)
                 opcoes_f = fer_disponiveis.apply(
-                    lambda r: f"{r['id_controle']} | QTD: {r['quantidade']} | {r['descricao_ferramenta']} ({r['condicao_fisica']})", axis=1
+                    lambda r: f"Cód D365: {r['codigo_d365']} | {r['descricao_d365'] or r['descricao_ferramenta']} | Saldo: {r['quantidade']} [ID: {r['id_controle']}]", axis=1
                 ).tolist()
-                sel_fer_str = st.selectbox("1️⃣ Selecione o Lote/Ferramenta Disponível:", opcoes_f)
-                id_fer_sel = sel_fer_str.split(" | ")[0]
-                reg_f = fer_disponiveis[fer_disponiveis['id_controle'] == id_fer_sel].iloc[0].to_dict()
-                qtd_estoque_max = _parse_int(reg_f.get('quantidade', '1'), 1)
+                
+                itens_selecionados = st.multiselect("1️⃣ Busque e Selecione as Ferramentas (Pode escolher várias):", opcoes_f)
+            
             with c_b2:
                 mat_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
                 mat_limpa = limpar_texto_matricula(mat_busca)
@@ -743,13 +740,24 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                     else:
                         st.warning("⚠️ Matrícula não localizada na base.")
 
+            qtds_entregar = {}
+            if itens_selecionados:
+                st.markdown("###### 📦 Defina a quantidade a entregar para cada ferramenta selecionada:")
+                c_q1, c_q2 = st.columns(2)
+                for idx, item_str in enumerate(itens_selecionados):
+                    id_fer = item_str.split("[ID: ")[1].replace("]", "")
+                    saldo_str = item_str.split(" | Saldo: ")[1].split(" ")[0]
+                    saldo_val = int(saldo_str) if saldo_str.isdigit() else 1
+                    desc = item_str.split(" | ")[1][:30] + "..."
+                    
+                    with (c_q1 if idx % 2 == 0 else c_q2):
+                        qtds_entregar[id_fer] = st.number_input(f"Qtd: {desc} (Máx {saldo_val})", min_value=1, max_value=saldo_val, value=1, key=f"qtd_{id_fer}")
+
             with st.form("form_nova_cautela_fer"):
                 cc1, cc2, cc3 = st.columns(3)
                 with cc1:
                     col_nome = st.text_input("Colaborador *", value=emp_info.get('nome', ''))
                     col_mat = st.text_input("Matrícula *", value=mat_limpa)
-                    # 04 - Exige quantidade exata na Cautela (Baixa Parcial)
-                    qtd_entregar = st.number_input(f"Qtd. a Entregar (Máx: {qtd_estoque_max})", min_value=1, max_value=qtd_estoque_max, value=1)
                 with cc2:
                     col_proj = st.text_input("Projeto *", value=emp_info.get('projeto', ''))
                     col_coord = st.text_input("Coordenação / Unidade *", value=emp_info.get('unidade', ''))
@@ -761,106 +769,119 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                 gerar_pdf_chk = st.checkbox("Gerar Termo de Responsabilidade em PDF (FR-RH-P-026)", value=True)
 
                 if st.form_submit_button("🚀 Confirmar Cautela e Entregar", type="primary"):
-                    if col_nome.strip():
+                    if col_nome.strip() and itens_selecionados:
                         hoje_s = dt_ent.strftime('%Y-%m-%d')
-                        id_caut = f"CAU-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                        id_caut_geral = f"CAU-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                         
-                        if qtd_entregar < qtd_estoque_max:
-                            # Quebra o lote (Mantém restante no Almoxarifado, cria novo para o Colaborador)
-                            saldo_restante = qtd_estoque_max - qtd_entregar
-                            supabase.table('ferramentas_usadas').update({'quantidade': str(saldo_restante)}).eq('id_controle', id_fer_sel).execute()
+                        lista_fakes_pdf = []
+                        
+                        # Processa a baixa de cada ferramenta agrupada no lote da Cautela
+                        for id_fer_sel, qtd_entregar in qtds_entregar.items():
+                            reg_f = fer_disponiveis[fer_disponiveis['id_controle'] == id_fer_sel].iloc[0].to_dict()
+                            qtd_estoque_max = _parse_int(reg_f.get('quantidade', '1'), 1)
                             
-                            id_entregue = gerar_proximo_id_fer(df_fer)
-                            novo_reg = reg_f.copy()
-                            novo_reg['id_controle'] = id_entregue
-                            novo_reg['quantidade'] = str(qtd_entregar)
-                            novo_reg['status_operacional'] = 'EM CAUTELA'
-                            novo_reg['localizacao'] = 'CAMPO / COLABORADOR'
-                            novo_reg['responsavel_atual'] = col_nome.strip()
-                            novo_reg['matricula'] = col_mat.strip()
-                            novo_reg['projeto'] = col_proj.strip()
-                            novo_reg['coordenacao'] = col_coord.strip()
-                            novo_reg['data_entrega'] = hoje_s
-                            novo_reg['ultima_movimentacao'] = hoje_s
-                            novo_reg['dias_sem_movimentacao'] = '0'
-                            
-                            supabase.table('ferramentas_usadas').insert([novo_reg]).execute()
-                        else:
-                            # Entrega lote inteiro
-                            id_entregue = id_fer_sel
-                            upd_fer = {
-                                'status_operacional': 'EM CAUTELA',
-                                'localizacao': 'CAMPO / COLABORADOR',
-                                'responsavel_atual': col_nome.strip(),
+                            if qtd_entregar < qtd_estoque_max:
+                                # Quebra o lote (Mantém restante no Almoxarifado, cria novo para o Colaborador)
+                                saldo_restante = qtd_estoque_max - qtd_entregar
+                                supabase.table('ferramentas_usadas').update({'quantidade': str(saldo_restante)}).eq('id_controle', id_fer_sel).execute()
+                                
+                                id_entregue = gerar_proximo_id_fer(df_fer)
+                                novo_reg = reg_f.copy()
+                                novo_reg['id_controle'] = id_entregue
+                                novo_reg['quantidade'] = str(qtd_entregar)
+                                novo_reg['status_operacional'] = 'EM CAUTELA'
+                                novo_reg['localizacao'] = 'CAMPO / COLABORADOR'
+                                novo_reg['responsavel_atual'] = col_nome.strip()
+                                novo_reg['matricula'] = col_mat.strip()
+                                novo_reg['projeto'] = col_proj.strip()
+                                novo_reg['coordenacao'] = col_coord.strip()
+                                novo_reg['data_entrega'] = hoje_s
+                                novo_reg['ultima_movimentacao'] = hoje_s
+                                novo_reg['dias_sem_movimentacao'] = '0'
+                                
+                                supabase.table('ferramentas_usadas').insert([novo_reg]).execute()
+                            else:
+                                # Entrega lote inteiro
+                                id_entregue = id_fer_sel
+                                upd_fer = {
+                                    'status_operacional': 'EM CAUTELA',
+                                    'localizacao': 'CAMPO / COLABORADOR',
+                                    'responsavel_atual': col_nome.strip(),
+                                    'matricula': col_mat.strip(),
+                                    'projeto': col_proj.strip(),
+                                    'coordenacao': col_coord.strip(),
+                                    'data_entrega': hoje_s,
+                                    'ultima_movimentacao': hoje_s,
+                                    'dias_sem_movimentacao': '0'
+                                }
+                                supabase.table('ferramentas_usadas').update(upd_fer).eq('id_controle', id_fer_sel).execute()
+
+                            nova_caut = {
+                                'id_cautela': id_caut_geral,
+                                'id_fer': id_entregue,
+                                'codigo_d365': reg_f.get('codigo_d365', ''),
+                                'colaborador': col_nome.strip(),
                                 'matricula': col_mat.strip(),
                                 'projeto': col_proj.strip(),
                                 'coordenacao': col_coord.strip(),
                                 'data_entrega': hoje_s,
-                                'ultima_movimentacao': hoje_s,
-                                'dias_sem_movimentacao': '0'
+                                'condicao_entrega': reg_f.get('condicao_fisica', 'USADO - BOM'),
+                                'data_prevista_devolucao': dt_prev.strftime('%Y-%m-%d'),
+                                'data_efetiva_devolucao': '',
+                                'condicao_devolucao': '',
+                                'status': 'EM CAUTELA',
+                                'observacao': f"Qtd: {qtd_entregar}. " + obs_caut.strip()
                             }
-                            supabase.table('ferramentas_usadas').update(upd_fer).eq('id_controle', id_fer_sel).execute()
+                            mov_caut = {
+                                'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{id_entregue[-4:]}",
+                                'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                'id_fer': id_entregue,
+                                'codigo_d365': reg_f.get('codigo_d365', ''),
+                                'tipo_movimento': 'CAUTELA',
+                                'localizacao_origem': reg_f.get('localizacao', 'USADO-DISP'),
+                                'localizacao_destino': 'CAMPO / COLABORADOR',
+                                'responsavel_origem': 'ALMOXARIFADO',
+                                'responsavel_destino': col_nome.strip(),
+                                'projeto': col_proj.strip(),
+                                'quantidade': str(qtd_entregar),
+                                'documento': id_caut_geral,
+                                'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
+                                'observacao': f"Entrega ({qtd_entregar} un) para {col_nome.strip()}"
+                            }
+                            supabase.table('cautelas_ferramentas').insert(nova_caut).execute()
+                            supabase.table('mov_ferramentas').insert(mov_caut).execute()
 
-                        nova_caut = {
-                            'id_cautela': id_caut,
-                            'id_fer': id_entregue,
-                            'codigo_d365': reg_f.get('codigo_d365', ''),
-                            'colaborador': col_nome.strip(),
-                            'matricula': col_mat.strip(),
-                            'projeto': col_proj.strip(),
-                            'coordenacao': col_coord.strip(),
-                            'data_entrega': hoje_s,
-                            'condicao_entrega': reg_f.get('condicao_fisica', 'USADO - BOM'),
-                            'data_prevista_devolucao': dt_prev.strftime('%Y-%m-%d'),
-                            'data_efetiva_devolucao': '',
-                            'condicao_devolucao': '',
-                            'status': 'EM CAUTELA',
-                            'observacao': f"Qtd Entregue: {qtd_entregar}. " + obs_caut.strip()
-                        }
-                        mov_caut = {
-                            'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                            'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'id_fer': id_entregue,
-                            'codigo_d365': reg_f.get('codigo_d365', ''),
-                            'tipo_movimento': 'CAUTELA',
-                            'localizacao_origem': reg_f.get('localizacao', 'USADO-DISP'),
-                            'localizacao_destino': 'CAMPO / COLABORADOR',
-                            'responsavel_origem': 'ALMOXARIFADO',
-                            'responsavel_destino': col_nome.strip(),
-                            'projeto': col_proj.strip(),
-                            'quantidade': str(qtd_entregar),
-                            'documento': id_caut,
-                            'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                            'observacao': f"Entrega parcial/total ({qtd_entregar} un) para {col_nome.strip()}"
-                        }
-                        supabase.table('cautelas_ferramentas').insert(nova_caut).execute()
-                        supabase.table('mov_ferramentas').insert(mov_caut).execute()
-
-                        if gerar_pdf_chk:
-                            # 01/02/03 - Formatação fake reflete no gerador do PDF adaptado
-                            df_fake_ativo = pd.DataFrame([{
+                            # Acumula info para PDF agrupado
+                            lista_fakes_pdf.append({
                                 'marca': reg_f.get('marca', ''),
                                 'modelo': reg_f.get('modelo', ''),
                                 'numero_serie': reg_f.get('numero_serie', ''),
+                                'patrimonio': id_entregue,
                                 'condicoes_para_uso': reg_f.get('condicao_fisica', 'USADO - BOM'),
-                                'acessorios': obs_caut.strip(),
-                                'coordenacao': col_coord.strip(),
+                                'acessorios': f"Qtd: {qtd_entregar} | {obs_caut.strip()}",
                                 'codigo_d365': reg_f.get('codigo_d365', ''),
-                                'descricao_d365': reg_f.get('descricao_d365', reg_f.get('descricao_ferramenta', ''))
-                            }])
+                                'descricao_d365': reg_f.get('descricao_d365', reg_f.get('descricao_ferramenta', '')),
+                                'coordenacao': col_coord.strip(),
+                                'nf_procisa': reg_f.get('documento_referencia', '')
+                            })
+
+                        if gerar_pdf_chk and len(lista_fakes_pdf) > 0:
+                            df_fake_ativo = pd.DataFrame(lista_fakes_pdf)
                             caminho = gerar_termo_pdf(
-                                id_entregue, col_nome.strip(), col_mat.strip(),
+                                id_caut_geral, col_nome.strip(), col_mat.strip(),
                                 emp_info.get('cpf', ''), emp_info.get('rg', ''),
                                 col_proj.strip(), col_coord.strip(), df_fake_ativo
                             )
                             with open(caminho, "rb") as f_pdf:
                                 st.session_state.pdf_cautela_fer = {
                                     'bytes': f_pdf.read(),
-                                    'nome': f"Termo_Ferramenta_{id_entregue}.pdf"
+                                    'nome': f"Termo_Cautela_Multipla_{id_caut_geral}.pdf"
                                 }
 
                         st.cache_data.clear()
                         st.rerun()
+                    elif not itens_selecionados:
+                        st.error("Selecione pelo menos uma ferramenta.")
                     else:
                         st.error("Informe o nome do colaborador.")
 
@@ -890,7 +911,6 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                     hoje_d = datetime.now().strftime('%Y-%m-%d')
                     id_f_dev = reg_c['id_fer']
                     
-                    # Recupera a quantidade que estava no ID da cautela
                     f_dev_match = df_fer[df_fer['id_controle'] == id_f_dev]
                     qtd_devolvida = f_dev_match.iloc[0]['quantidade'] if not f_dev_match.empty else '1'
                     
