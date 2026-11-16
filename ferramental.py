@@ -1,16 +1,77 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from nuvem import (
-    supabase, COLUNAS_FERRAMENTAS, COLUNAS_MOV_FER, COLUNAS_CAUTELA_FER,
-    COLUNAS_MANUT_FER, COLUNAS_BAIXA_FER, COLUNAS_CONCILIACAO_D365,
-    LISTA_CONDICAO_FISICA, LISTA_STATUS_OPERACIONAL, LISTA_LOCALIZACOES_FER,
-    LISTA_TIPOS_MOV_FER, gerar_proximo_id_fer, buscar_ferramenta,
-    registrar_log_auditoria, exibir_marca_desenvolvedor, normalizar_nome_coluna,
-    salvar_dados_massa, matricula_valida, limpar_texto_matricula,
-    carregar_preferencias_colunas, salvar_preferencias_colunas
-)
+import nuvem
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel, gerar_termo_pdf
+
+# Extração resiliente de constantes e funções do módulo nuvem (imune a cache de reload)
+supabase = nuvem.supabase
+registrar_log_auditoria = nuvem.registrar_log_auditoria
+exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
+normalizar_nome_coluna = nuvem.normalizar_nome_coluna
+salvar_dados_massa = nuvem.salvar_dados_massa
+matricula_valida = nuvem.matricula_valida
+limpar_texto_matricula = nuvem.limpar_texto_matricula
+carregar_preferencias_colunas = getattr(nuvem, 'carregar_preferencias_colunas', lambda: {})
+salvar_preferencias_colunas = getattr(nuvem, 'salvar_preferencias_colunas', lambda *a, **kw: None)
+
+COLUNAS_FERRAMENTAS = getattr(nuvem, 'COLUNAS_FERRAMENTAS', [
+    'id_controle', 'codigo_d365', 'descricao_d365', 'descricao_ferramenta',
+    'categoria', 'marca', 'modelo', 'numero_serie', 'patrimonio',
+    'quantidade', 'unidade', 'condicao_fisica', 'status_operacional',
+    'localizacao', 'responsavel_atual', 'matricula', 'projeto', 'coordenacao',
+    'data_entrada', 'data_entrega', 'data_devolucao', 'ultima_movimentacao',
+    'dias_sem_movimentacao', 'data_ultima_inspecao', 'proxima_inspecao',
+    'valor_referencia', 'custo_acumulado_manutencao', 'quantidade_manutencoes',
+    'motivo_segregacao', 'destinacao_final', 'documento_referencia', 'observacoes'
+])
+
+LISTA_CONDICAO_FISICA = getattr(nuvem, 'LISTA_CONDICAO_FISICA', [
+    "NOVO", "USADO - BOM", "USADO - REGULAR", "EM INSPEÇÃO",
+    "EM MANUTENÇÃO", "COM DEFEITO", "SEGREGADO", "OBSOLETO", "DESCARTE"
+])
+
+LISTA_STATUS_OPERACIONAL = getattr(nuvem, 'LISTA_STATUS_OPERACIONAL', [
+    "DISPONÍVEL", "EM CAUTELA", "EM INSPEÇÃO", "EM MANUTENÇÃO",
+    "BLOQUEADO", "AGUARDANDO DECISÃO", "AGUARDANDO DESCARTE", "TRANSFERIDO", "BAIXADO"
+])
+
+LISTA_LOCALIZACOES_FER = getattr(nuvem, 'LISTA_LOCALIZACOES_FER', [
+    "USADO-DISP", "USADO-INSPECAO", "USADO-MANUT", "USADO-DEFEITO",
+    "USADO-SEGREGADO", "USADO-OBSOLETO", "USADO-DESCARTE", "CAMPO / COLABORADOR", "BAIXADO / DESCARTADO"
+])
+
+LISTA_TIPOS_MOV_FER = getattr(nuvem, 'LISTA_TIPOS_MOV_FER', [
+    "ENTRADA", "DEVOLUÇÃO", "ENTREGA", "CAUTELA", "TRANSFERÊNCIA",
+    "ENVIO PARA MANUTENÇÃO", "RETORNO DE MANUTENÇÃO", "LIBERAÇÃO",
+    "SEGREGAÇÃO", "BAIXA", "DESCARTE"
+])
+
+def gerar_proximo_id_fer(df_fer):
+    if hasattr(nuvem, 'gerar_proximo_id_fer'):
+        return nuvem.gerar_proximo_id_fer(df_fer)
+    if df_fer.empty or 'id_controle' not in df_fer.columns:
+        return "FER-000001"
+    maior = 0
+    for val in df_fer['id_controle'].astype(str):
+        val_limpo = val.strip().upper()
+        if val_limpo.startswith("FER-"):
+            num_str = val_limpo.replace("FER-", "").strip()
+            if num_str.isdigit():
+                maior = max(maior, int(num_str))
+    return f"FER-{maior + 1:06d}"
+
+def buscar_ferramenta(termo_busca, df_fer):
+    if hasattr(nuvem, 'buscar_ferramenta'):
+        return nuvem.buscar_ferramenta(termo_busca, df_fer)
+    if df_fer.empty or not termo_busca:
+        return pd.DataFrame()
+    t = str(termo_busca).strip().upper()
+    id_c = df_fer['id_controle'].fillna("").astype(str).str.strip().str.upper()
+    c_d365 = df_fer['codigo_d365'].fillna("").astype(str).str.strip().str.upper()
+    pat = df_fer['patrimonio'].fillna("").astype(str).str.strip().str.upper()
+    ser = df_fer['numero_serie'].fillna("").astype(str).str.strip().str.upper()
+    return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t)]
 
 # ==========================================
 # ESTILIZAÇÃO VISUAL DE ALERTAS (ITEM 13)
@@ -71,7 +132,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     st.header("🛠️ Controle Gerencial de Ferramentas Usadas / Reutilizáveis")
     st.caption("Controle operacional complementar ao D365 — Rastreabilidade física e individual sem alterar artificialmente o saldo do ERP.")
 
-    # --- ITEM 8: SALDO OPERACIONAL DE FERRAMENTAS USADAS ---
     st.markdown("##### 📊 SALDO OPERACIONAL DE FERRAMENTAS USADAS")
     
     if not df_fer.empty:
@@ -131,7 +191,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 
     tabs = st.tabs(abas_fer)
 
-    # --- ABA 0: LISTAGEM PRINCIPAL COM SEMÁFORO E SHOW/HIDE ---
     with tabs[0]:
         with st.expander("👁️ Filtros e Colunas Visíveis", expanded=False):
             f1, f2, f3, f4 = st.columns(4)
@@ -173,7 +232,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         else:
             st.info("Nenhuma ferramenta usada cadastrada ainda. Utilize a aba '➕ Cadastrar / Receber Ferramenta' ao lado.")
 
-    # --- ABA 1: CADASTRO INDIVIDUAL OU LOTE (ITENS 1, 2, 3, 4, 5) ---
     with tabs[1]:
         st.subheader("➕ Recebimento / Cadastro de Ferramenta Usada")
         prox_id = gerar_proximo_id_fer(df_fer)
@@ -282,12 +340,10 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 else:
                     st.error("Preencha a 'Descrição Operacional da Ferramenta'.")
 
-    # --- ABA 2: HISTÓRICO DE MOVIMENTOS (ITEM 7) ---
     with tabs[2]:
         st.subheader("📜 Histórico Completo de Movimentações do Ferramental")
         st.dataframe(df_mov_fer, use_container_width=True, hide_index=True)
 
-    # --- ABA 3: IMPORTAR / EXPORTAR & BACKUP ---
     with tabs[3]:
         st.subheader("📤 Exportar Relatórios do Ferramental (.xlsx)")
         stamp = datetime.now().strftime('%Y%m%d_%H%M')
@@ -337,7 +393,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
             except Exception as e:
                 st.error(f"Erro ao processar planilha: {e}")
 
-    # --- ABA 4: EXCLUSÃO EM LOTE (MASTER) ---
     if st.session_state.perfil == 'Master':
         with tabs[4]:
             st.subheader("❌ Exclusão de Ferramentas por Seleção (Master)")
