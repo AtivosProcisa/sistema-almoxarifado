@@ -99,43 +99,39 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
     pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
     
-    reg_ativo = info_ativo.iloc[0]
-    
-    # 01 - Limpeza de Marca/Modelo (Não puxar equipamento, apenas marca e modelo puros)
-    marca = str(reg_ativo.get('marca', '')).strip()
-    modelo = str(reg_ativo.get('modelo', '')).strip()
-    serie = str(reg_ativo.get('numero_serie', '')).strip()
-    
-    # Se marca e modelo estiverem vazios, a linha ficará em branco
-    marca_modelo_texto = f"{marca} {modelo}".strip()
-    
-    condicao = str(reg_ativo.get('condicoes_para_uso', 'USADO - BOM')).strip()
-    acessorios = str(reg_ativo.get('acessorios', '')).strip()
-    coordenador = str(reg_ativo.get('coordenacao', unidade)).strip()
-    nf_procisa = str(reg_ativo.get('nf_procisa', '')).strip()
-    
-    # Captura dados D365 se existirem
-    cod_d365 = str(reg_ativo.get('codigo_d365', '')).strip()
-    desc_d365 = str(reg_ativo.get('descricao_d365', '')).strip()
-    
-    # 02 - Situação/Acessórios mantendo o padrão
-    situacao_completa = f"{condicao} - {acessorios}".strip(" -") if acessorios else condicao
-    
     pdf.ln(4)
-    # Linha 1: Marca/Modelo puros
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"1. MARCA/MODELO: {marca_modelo_texto}"), ln=True)
-    # Linha 2: Série e Patrimônio (ID FER)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}      NÚMERO DE ATIVO: {patrimonio}"), ln=True)
-    # Linha 3: Situação
-    pdf.multi_cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO / ACESSÓRIOS: {situacao_completa}"))
     
-    # 03 - Linha Adicional: CÓD D365 e Descrição
-    if cod_d365:
-        pdf.cell(0, 6, txt=limpar_texto_pdf(f"   CÓD D365: {cod_d365} - {desc_d365}"), ln=True)
-    
-    pdf.ln(3)
-    
-    for i in range(2, 6):
+    # 01/02/03 - Preenche até 5 itens (Caso seja entrega múltipla)
+    for idx, reg_ativo in info_ativo.reset_index(drop=True).iterrows():
+        if idx >= 5:
+            break
+            
+        marca = str(reg_ativo.get('marca', '')).strip()
+        modelo = str(reg_ativo.get('modelo', '')).strip()
+        serie = str(reg_ativo.get('numero_serie', '')).strip()
+        marca_modelo_texto = f"{marca} {modelo}".strip()
+        pat_id = str(reg_ativo.get('patrimonio', patrimonio)).strip() # Na cautela múltipla, enviamos o ID FER via patrimônio
+        
+        condicao = str(reg_ativo.get('condicoes_para_uso', 'USADO - BOM')).strip()
+        acessorios = str(reg_ativo.get('acessorios', '')).strip()
+        situacao_completa = f"{condicao} - {acessorios}".strip(" -") if acessorios else condicao
+        
+        cod_d365 = str(reg_ativo.get('codigo_d365', '')).strip()
+        desc_d365 = str(reg_ativo.get('descricao_d365', '')).strip()
+        
+        # Puxa informações gerais do último item processado para o rodapé
+        coordenador = str(reg_ativo.get('coordenacao', unidade)).strip()
+        nf_procisa = str(reg_ativo.get('nf_procisa', '')).strip()
+
+        pdf.cell(0, 6, txt=limpar_texto_pdf(f"{idx+1}. MARCA/MODELO: {marca_modelo_texto}"), ln=True)
+        pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}      NÚMERO DE ATIVO: {pat_id}"), ln=True)
+        pdf.multi_cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO / ACESSÓRIOS: {situacao_completa}"))
+        if cod_d365:
+            pdf.cell(0, 6, txt=limpar_texto_pdf(f"   CÓD D365: {cod_d365} - {desc_d365}"), ln=True)
+        pdf.ln(3)
+
+    # Linhas vazias para completar as 5
+    for i in range(len(info_ativo) + 1, 6):
         pdf.cell(0, 5, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
         pdf.cell(0, 5, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: ___________________  NÚMERO DE ATIVO: ___________________"), ln=True)
         pdf.cell(0, 5, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
@@ -146,7 +142,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(0, 6, txt=limpar_texto_pdf("[  ] MANUTENÇÃO   [  ] DESLIGAMENTO   [  ] CALIBRAÇÃO"), ln=True)
     
     pdf.ln(3)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"OBSERVAÇÕES: {acessorios if acessorios else '________________________________________________________________'}"), ln=True)
+    pdf.cell(0, 6, txt=limpar_texto_pdf(f"OBSERVAÇÕES: ____________________________________________________________________"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"COORD. RESPONSÁVEL: {coordenador if coordenador else '______________________'}      NÚMERO DA NF: {nf_procisa if nf_procisa else '______________________'}"), ln=True)
     
     pdf.ln(12)
