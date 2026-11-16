@@ -79,11 +79,9 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         st_op = df_fer['status_operacional'].astype(str).str.upper().str.strip()
         cd_fi = df_fer['condicao_fisica'].astype(str).str.upper().str.strip()
 
-        # Total físico exclui apenas itens já efetivamente baixados/descartados definitivamente
         mask_ativo_fisico = ~st_op.isin(['BAIXADO', 'TRANSFERIDO'])
         total_fisico = int(qtd_series[mask_ativo_fisico].sum())
         
-        # Regra Item 4: Somente ferramentas aprovadas (BOM/REGULAR/NOVO) e classificadas como DISPONÍVEL
         mask_disp = (st_op == 'DISPONÍVEL') & (cd_fi.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))
         s_disp = int(qtd_series[mask_disp].sum())
         s_cautela = int(qtd_series[st_op == 'EM CAUTELA'].sum())
@@ -96,7 +94,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     else:
         total_fisico = s_disp = s_cautela = s_manut = s_insp = s_defeito = s_segreg = s_obsoleto = s_descarte = 0
 
-    # Cards Visuais com Semáforo (Item 13)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("📦 TOTAL FÍSICO", total_fisico)
     c2.metric("🟢 DISPONÍVEL (Aprovadas)", s_disp, help="Apenas ferramentas aprovadas e prontas para nova entrega")
@@ -186,7 +183,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
             c_a, c_b, c_c, c_d = st.columns(4)
             with c_a:
                 id_fer_input = st.text_input("ID Controle (ID FER) *", value=prox_id)
-                qtd_clones = st.number_input("Gerar quantos IDs FER iguais? (Lote Individual)", min_value=1, max_value=50, value=1, help="Se colocar 3, o sistema criará 3 registros individuais sequenciais (ex: FER-000001, FER-000002, FER-000003) para o mesmo Código D365.")
+                qtd_clones = st.number_input("Gerar quantos IDs FER iguais? (Lote Individual)", min_value=1, max_value=50, value=1, help="Se colocar 3, o sistema criará 3 registros individuais sequenciais para o mesmo Código D365.")
                 cod_d365 = st.text_input("Código D365 (Referência ERP)")
                 desc_d365 = st.text_input("Descrição Oficial D365")
                 desc_fer = st.text_input("Descrição Operacional da Ferramenta *")
@@ -218,7 +215,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                     novos_registros = []
                     movs_iniciais = []
 
-                    # Calcula número base para geração sequencial caso qtd_clones > 1
                     base_num = int(prox_id.replace("FER-", "")) if prox_id.startswith("FER-") and prox_id.replace("FER-", "").isdigit() else 1
 
                     for i in range(int(qtd_clones)):
@@ -510,8 +506,10 @@ def render_inspecao_movimentacao_fer(df_fer):
                     t_mov = st.selectbox("Tipo de Movimento:", LISTA_TIPOS_MOV_FER)
                     loc_dest = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER)
                 with cm2:
-                     st_novo = st.selectbox("Novo Status Operacional:", LISTA_STATUS_OPERACIONAL, index=LISTA_STATUS_OPERACIONAL.index(r_mv['status_operacional']) if r_mv['status_operacional'] in LISTA_STATUS_OPERACIONAL else 0)
-                    cd_nova = st.selectbox("Condição Física:", LISTA_CONDICAO_FISICA, index=LISTA_CONDICAO_FISICA.index(r_mv['condicao_fisica']) if r_mv['condicao_fisica'] in LISTA_CONDICAO_FISICA else 1)
+                    idx_st = LISTA_STATUS_OPERACIONAL.index(r_mv['status_operacional']) if r_mv['status_operacional'] in LISTA_STATUS_OPERACIONAL else 0
+                    idx_cd = LISTA_CONDICAO_FISICA.index(r_mv['condicao_fisica']) if r_mv['condicao_fisica'] in LISTA_CONDICAO_FISICA else 1
+                    st_novo = st.selectbox("Novo Status Operacional:", LISTA_STATUS_OPERACIONAL, index=idx_st)
+                    cd_nova = st.selectbox("Condição Física:", LISTA_CONDICAO_FISICA, index=idx_cd)
                 with cm3:
                     resp_dest = st.text_input("Responsável Destino:", value=r_mv.get('responsavel_atual', 'ALMOXARIFADO'))
                     proj_dest = st.text_input("Projeto:", value=r_mv.get('projeto', ''))
@@ -583,7 +581,6 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
     ])
 
     with aba_entrega:
-        # Filtra rigorosamente apenas ferramentas DISPONÍVEIS e aprovadas
         fer_disponiveis = df_fer[
             (df_fer['status_operacional'] == 'DISPONÍVEL') &
             (df_fer['condicao_fisica'].isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))
@@ -720,11 +717,11 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
             with st.form("form_dev_cautela"):
                 cd1, cd2, cd3 = st.columns(3)
                 with cd1:
-                    cond_dev = st.selectbox("Condição na Devolução:", LISTA_CONDICAO_FISICA, index=3) # Sugere EM INSPEÇÃO conforme Fluxo Item 6
+                    cond_dev = st.selectbox("Condição na Devolução:", LISTA_CONDICAO_FISICA, index=3)
                 with cd2:
                     st_pos_dev = st.selectbox("Status Após Devolução (Fluxo: Recebimento -> Inspeção):", ["EM INSPEÇÃO", "DISPONÍVEL", "EM MANUTENÇÃO", "BLOQUEADO"], index=0)
                 with cd3:
-                    loc_pos_dev = st.selectbox("Localização de Recebimento:", LISTA_LOCALIZACOES_FER, index=1) # USADO-INSPECAO
+                    loc_pos_dev = st.selectbox("Localização de Recebimento:", LISTA_LOCALIZACOES_FER, index=1)
 
                 obs_dev = st.text_input("Observação no Recebimento / Avarias:")
 
@@ -787,7 +784,6 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
         "⚪ Obsolescência, Laudo e Descarte (Item 12)"
     ])
 
-    # --- ITEM 11: MANUTENÇÃO ---
     with aba_manut:
         st.subheader("🔧 Registro de Manutenção e Cálculo Automático de Custo Acumulado")
         busca_m = st.text_input("🔍 Digite o ID FER ou Código D365 da ferramenta:", key="b_manut_f")
@@ -892,7 +888,6 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
         st.markdown("###### 📋 Histórico Geral de Manutenções")
         st.dataframe(df_manut_fer, use_container_width=True, hide_index=True)
 
-    # --- ITEM 12: OBSOLESCÊNCIA E DESCARTE ---
     with aba_baixa:
         st.subheader("⚪ Controle de Obsolescência, Viabilidade e Processo de Baixa/Descarte")
         busca_bx = st.text_input("🔍 Digite o ID FER para registrar Segregação / Laudo de Baixa:", key="b_baixa_f")
@@ -997,7 +992,6 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
         "💡 **Regra de Governança (Item 9):** Esta conciliação compara o saldo informado no ERP D365 (quando existente) com o **Saldo Operacional de Ferramentas Usadas** físico, sem alterar artificialmente o ERP."
     )
 
-    # Calcula automaticamente o saldo operacional agrupado por codigo_d365
     saldos_op_map = {}
     desc_map = {}
     if not df_fer.empty:
@@ -1018,7 +1012,6 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
                 cod_sel = st.selectbox("Selecionar Código D365 cadastrado (ou digite ao lado):", [""] + codigos_sug)
                 cod_manual = st.text_input("Ou Digite o Código D365:")
                 cod_final = cod_manual.strip() if cod_manual.strip() else cod_sel
-                saldo_op_calc = saldos_op_map.get(cod_final, 0)
             with c2:
                 desc_d365_in = st.text_input("Descrição D365:", value=desc_map.get(cod_final, ''))
                 saldo_erp = st.number_input("Saldo Oficial no D365:", min_value=0, value=0, step=1)
@@ -1050,7 +1043,6 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
                 else:
                     st.error("Informe o Código D365.")
 
-    # Atualiza em tempo real o saldo operacional na tabela de conciliação exibida
     if not df_conc_d365.empty:
         df_view_c = df_conc_d365.copy()
         for idx, row in df_view_c.iterrows():
