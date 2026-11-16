@@ -74,7 +74,7 @@ def buscar_ferramenta(termo_busca, df_fer):
     return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t)]
 
 # ==========================================
-# ESTILIZAÇÃO VISUAL DE ALERTAS (ITEM 13)
+# ESTILIZAÇÃO VISUAL DE ALERTAS
 # ==========================================
 def formatar_badge_alerta(status_op, cond_fis):
     st_up = str(status_op).strip().upper()
@@ -122,7 +122,7 @@ def update_cols_fer():
     )
 
 # ==========================================
-# F1: PAINEL GERENCIAL E SALDO OPERACIONAL (ITENS 1, 2, 8, 13)
+# F1: PAINEL GERENCIAL E SALDO OPERACIONAL
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -368,28 +368,84 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 
         st.divider()
         st.subheader("📥 Importar Planilha de Ferramentas Usadas (.xlsx)")
+        st.info("💡 A ferramenta reconhece automaticamente o padrão **MASSIVO FERRAMENTAL** (Número do item, Nome do produto, Pesquisar nome, Total, etc) ou o padrão da própria ferramenta (exportado acima). O que faltar pode ser deixado em branco para edição manual depois.")
+        
         arq_fer = st.file_uploader("Arraste a planilha Excel com a relação de ferramentas (.xlsx)", type=["xlsx"], key="up_fer_mass")
         if arq_fer:
             try:
                 df_up_f = pd.read_excel(arq_fer)
                 df_up_f.columns = [normalizar_nome_coluna(c) for c in df_up_f.columns]
-                if 'id_controle' not in df_up_f.columns:
-                    base_n = len(df_fer) + 1
-                    df_up_f['id_controle'] = [f"FER-{base_n + idx:06d}" for idx in range(len(df_up_f))]
+                
+                # MAPEAMENTO DO PADRÃO "MASSIVO FERRAMENTAL"
+                de_para_massivo = {
+                    'numero_do_item': 'codigo_d365',
+                    'nome_do_produto': 'descricao_d365',
+                    'pesquisar_nome': 'descricao_ferramenta',
+                    'total': 'quantidade',
+                    'serial': 'numero_serie',
+                    'status': 'condicao_fisica'
+                }
+                df_up_f = df_up_f.rename(columns=de_para_massivo)
+                
+                # Endereçamentos físicos da planilha massiva vão para observações para controle logístico
+                if 'enderecamento_01' in df_up_f.columns or 'enderecamento_02' in df_up_f.columns:
+                    e1 = df_up_f.get('enderecamento_01', pd.Series(['']*len(df_up_f))).fillna('').astype(str)
+                    e2 = df_up_f.get('enderecamento_02', pd.Series(['']*len(df_up_f))).fillna('').astype(str)
+                    df_up_f['observacoes'] = "Endereço: " + e1 + " / " + e2
+                
+                # Preenche valores que vieram em branco com o padrão operacional
                 if 'condicao_fisica' not in df_up_f.columns:
                     df_up_f['condicao_fisica'] = 'USADO - BOM'
+                else:
+                    df_up_f['condicao_fisica'] = df_up_f['condicao_fisica'].fillna('USADO - BOM')
+                    
                 if 'status_operacional' not in df_up_f.columns:
                     df_up_f['status_operacional'] = 'DISPONÍVEL'
+                    
                 if 'localizacao' not in df_up_f.columns:
                     df_up_f['localizacao'] = 'USADO-DISP'
+                    
                 if 'quantidade' not in df_up_f.columns:
                     df_up_f['quantidade'] = '1'
-                st.dataframe(df_up_f.head(5), use_container_width=True)
+                
+                # Limpa N/A ou Vazio de Marca, Modelo, Serie para evitar bugs na exibição
+                for c_limpar in ['marca', 'modelo', 'numero_serie', 'categoria', 'projeto', 'coordenacao']:
+                    if c_limpar in df_up_f.columns:
+                        df_up_f[c_limpar] = df_up_f[c_limpar].fillna('')
+                
+                # Gera o ID Controle (FER-000000) sequencial para as linhas importadas
+                base_n = 0
+                if not df_fer.empty and 'id_controle' in df_fer.columns:
+                    for val in df_fer['id_controle'].astype(str):
+                        val_limpo = val.strip().upper()
+                        if val_limpo.startswith("FER-"):
+                            num_str = val_limpo.replace("FER-", "").strip()
+                            if num_str.isdigit():
+                                base_n = max(base_n, int(num_str))
+                
+                if 'id_controle' not in df_up_f.columns:
+                    df_up_f['id_controle'] = [f"FER-{base_n + idx + 1:06d}" for idx in range(len(df_up_f))]
+                else:
+                    # Se tiver a coluna mas ela estiver vazia em algum ponto
+                    faltantes_mask = df_up_f['id_controle'].isnull() | (df_up_f['id_controle'] == '')
+                    novos_ids = [f"FER-{base_n + idx + 1:06d}" for idx in range(faltantes_mask.sum())]
+                    df_up_f.loc[faltantes_mask, 'id_controle'] = novos_ids
+                
+                # Parametrização inicial de cadastro
+                df_up_f['responsavel_atual'] = 'ALMOXARIFADO'
+                df_up_f['data_entrada'] = datetime.now().strftime('%Y-%m-%d')
+                df_up_f['ultima_movimentacao'] = datetime.now().strftime('%Y-%m-%d')
+                df_up_f['dias_sem_movimentacao'] = '0'
+
+                st.caption(f"Leitura concluída. Identificação do Padrão Massivo efetuada. Pré-visualização ({len(df_up_f)} itens):")
+                st.dataframe(df_up_f[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'quantidade', 'condicao_fisica']].head(5), use_container_width=True)
+                
                 if st.button("🚀 Confirmar Importação de Ferramentas", type="primary"):
-                    if salvar_dados_massa('ferramentas_usadas', df_up_f, COLUNAS_FERRAMENTAS):
-                        registrar_log_auditoria("UPLOAD FERRAMENTAL", arq_fer.name, f"{len(df_up_f)} ferramentas importadas.")
-                        st.success("✅ Ferramentas importadas com sucesso!")
-                        st.rerun()
+                    with st.spinner("Enviando ferramentas para o Supabase..."):
+                        if salvar_dados_massa('ferramentas_usadas', df_up_f, COLUNAS_FERRAMENTAS):
+                            registrar_log_auditoria("UPLOAD FERRAMENTAL", arq_fer.name, f"{len(df_up_f)} ferramentas importadas (Padrão Massivo).")
+                            st.success("✅ Ferramentas importadas com sucesso!")
+                            st.rerun()
             except Exception as e:
                 st.error(f"Erro ao processar planilha: {e}")
 
@@ -422,7 +478,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F2: FLUXO DE INSPEÇÃO, TRIAGEM E MOVIMENTAÇÃO (ITENS 6, 7)
+# F2: FLUXO DE INSPEÇÃO, TRIAGEM E MOVIMENTAÇÃO
 # ==========================================
 def render_inspecao_movimentacao_fer(df_fer):
     st.header("🔍 Fluxo de Inspeção, Classificação e Endereçamento")
@@ -609,7 +665,7 @@ def render_inspecao_movimentacao_fer(df_fer):
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F3: CONTROLE DE CAUTELA DE FERRAMENTAS (ITEM 10)
+# F3: CONTROLE DE CAUTELA DE FERRAMENTAS
 # ==========================================
 def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
     st.header("👷 Controle de Cautela (Entrega e Devolução de Ferramentas)")
@@ -829,7 +885,7 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F4: MANUTENÇÃO, OBSOLESCÊNCIA E DESCARTE (ITENS 11, 12)
+# F4: MANUTENÇÃO, OBSOLESCÊNCIA E DESCARTE
 # ==========================================
 def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
     st.header("🔧 Oficina / Manutenção & Controle de Obsolescência e Descarte")
