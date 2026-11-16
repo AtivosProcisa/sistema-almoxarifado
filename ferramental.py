@@ -115,7 +115,7 @@ def update_cols_fer():
     )
 
 # ==========================================
-# F1: PAINEL GERENCIAL (Métricas Atualizadas)
+# F1: PAINEL GERENCIAL
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -721,7 +721,6 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
         else:
             c_b1, c_b2 = st.columns(2)
             with c_b1:
-                # 01/02 - Busca Múltipla Inteligente (PROCV)
                 opcoes_f = fer_disponiveis.apply(
                     lambda r: f"Cód D365: {r['codigo_d365']} | {r['descricao_d365'] or r['descricao_ferramenta']} | Saldo: {r['quantidade']} [ID: {r['id_controle']}]", axis=1
                 ).tolist()
@@ -775,6 +774,11 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                         
                         lista_fakes_pdf = []
                         
+                        # Pegar o próximo ID base para evitar duplicação em caso de múltiplas quebras de lote no mesmo clique
+                        prox_id_str = gerar_proximo_id_fer(df_fer)
+                        base_num = int(prox_id_str.replace("FER-", "")) if prox_id_str.startswith("FER-") and prox_id_str.replace("FER-", "").isdigit() else 1
+                        lotes_quebrados = 0
+                        
                         # Processa a baixa de cada ferramenta agrupada no lote da Cautela
                         for id_fer_sel, qtd_entregar in qtds_entregar.items():
                             reg_f = fer_disponiveis[fer_disponiveis['id_controle'] == id_fer_sel].iloc[0].to_dict()
@@ -785,7 +789,9 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                 saldo_restante = qtd_estoque_max - qtd_entregar
                                 supabase.table('ferramentas_usadas').update({'quantidade': str(saldo_restante)}).eq('id_controle', id_fer_sel).execute()
                                 
-                                id_entregue = gerar_proximo_id_fer(df_fer)
+                                id_entregue = f"FER-{base_num + lotes_quebrados:06d}"
+                                lotes_quebrados += 1
+                                
                                 novo_reg = reg_f.copy()
                                 novo_reg['id_controle'] = id_entregue
                                 novo_reg['quantidade'] = str(qtd_entregar)
@@ -846,7 +852,7 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                 'quantidade': str(qtd_entregar),
                                 'documento': id_caut_geral,
                                 'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                                'observacao': f"Entrega ({qtd_entregar} un) para {col_nome.strip()}"
+                                'observacao': f"Entrega parcial/total ({qtd_entregar} un) para {col_nome.strip()}"
                             }
                             supabase.table('cautelas_ferramentas').insert(nova_caut).execute()
                             supabase.table('mov_ferramentas').insert(mov_caut).execute()
