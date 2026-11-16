@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 import nuvem
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel, gerar_termo_pdf
 
-# Extração resiliente de constantes e funções do módulo nuvem (imune a cache de reload)
 supabase = nuvem.supabase
 registrar_log_auditoria = nuvem.registrar_log_auditoria
 exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
@@ -73,9 +72,6 @@ def buscar_ferramenta(termo_busca, df_fer):
     ser = df_fer['numero_serie'].fillna("").astype(str).str.strip().str.upper()
     return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t)]
 
-# ==========================================
-# ESTILIZAÇÃO VISUAL DE ALERTAS
-# ==========================================
 def formatar_badge_alerta(status_op, cond_fis, dias_ociosos=0):
     st_up = str(status_op).strip().upper()
     cd_up = str(cond_fis).strip().upper()
@@ -98,23 +94,16 @@ def formatar_badge_alerta(status_op, cond_fis, dias_ociosos=0):
     return f"⚪ {st_up}"
 
 def _parse_float(val):
-    if not val:
-        return 0.0
+    if not val: return 0.0
     txt = str(val).replace("R$", "").replace(" ", "").strip()
-    if "," in txt and "." in txt:
-        txt = txt.replace(".", "").replace(",", ".")
-    elif "," in txt:
-        txt = txt.replace(",", ".")
-    try:
-        return float(txt)
-    except Exception:
-        return 0.0
+    if "," in txt and "." in txt: txt = txt.replace(".", "").replace(",", ".")
+    elif "," in txt: txt = txt.replace(",", ".")
+    try: return float(txt)
+    except: return 0.0
 
 def _parse_int(val, default=1):
-    try:
-        return int(float(str(val).strip()))
-    except Exception:
-        return default
+    try: return int(float(str(val).strip()))
+    except: return default
 
 def update_cols_fer():
     st.session_state.saved_cols_fer = st.session_state.ms_fer_key
@@ -126,7 +115,7 @@ def update_cols_fer():
     )
 
 # ==========================================
-# F1: PAINEL GERENCIAL E SALDO OPERACIONAL
+# F1: PAINEL GERENCIAL (Métricas Atualizadas - Item 04 e 05)
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -136,47 +125,33 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     st.header("🛠️ Controle Gerencial de Ferramentas Usadas / Reutilizáveis")
     st.caption("Controle operacional complementar ao D365 — Rastreabilidade física e individual sem alterar artificialmente o saldo do ERP.")
 
-    st.markdown("##### 📊 SALDO OPERACIONAL DE FERRAMENTAS USADAS")
+    st.markdown("##### 📊 SALDO OPERACIONAL DE FERRAMENTAS USADAS (Contagem por Quantidade Informada)")
     
     if not df_fer.empty:
+        qtd_series = df_fer['quantidade'].apply(lambda x: _parse_int(x, 1))
         st_op = df_fer['status_operacional'].astype(str).str.upper().str.strip()
         cd_fi = df_fer['condicao_fisica'].astype(str).str.upper().str.strip()
         dias_ociosos = df_fer['dias_sem_movimentacao'].apply(lambda x: _parse_int(x, 0))
 
         mask_ativo_fisico = ~st_op.isin(['BAIXADO', 'TRANSFERIDO'])
         
-        # Contagem baseada na Quantidade de Itens (Linhas exclusivas) em vez da Soma
-        total_fisico = int(mask_ativo_fisico.sum())
+        # 04 - Contabilizar pelo campo QUANTIDADE da linha, não por linha única
+        total_fisico = int(qtd_series[mask_ativo_fisico].sum())
         
         mask_disp = (st_op == 'DISPONÍVEL') & (cd_fi.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))
+        s_disp = int(qtd_series[mask_disp].sum())
+        s_cautela = int(qtd_series[st_op == 'EM CAUTELA'].sum())
         
-        s_disp = int(mask_disp.sum())
-        s_cautela = int((st_op == 'EM CAUTELA').sum())
-        s_manut = int(((st_op == 'EM MANUTENÇÃO') | (cd_fi == 'EM MANUTENÇÃO')).sum())
-        s_insp = int(((st_op == 'EM INSPEÇÃO') | (cd_fi == 'EM INSPEÇÃO')).sum())
-        s_defeito = int(((cd_fi == 'COM DEFEITO') | (st_op == 'BLOQUEADO')).sum())
-        s_segreg = int((cd_fi == 'SEGREGADO').sum())
-        s_obsoleto = int((cd_fi == 'OBSOLETO').sum())
-        s_descarte = int(((st_op == 'AGUARDANDO DESCARTE') | (cd_fi == 'DESCARTE')).sum())
-        
-        # Ociosidade: ferramentas que estão ativas mas paradas há > 90 dias
-        s_ocioso = int(((dias_ociosos > 90) & mask_ativo_fisico).sum())
+        # 05 - Ociosidade em destaque (Simplificando painel inferior)
+        s_ocioso = int(qtd_series[(dias_ociosos > 90) & mask_ativo_fisico].sum())
     else:
-        total_fisico = s_disp = s_cautela = s_manut = s_insp = s_defeito = s_segreg = s_obsoleto = s_descarte = s_ocioso = 0
+        total_fisico = s_disp = s_cautela = s_ocioso = 0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("📦 TOTAL FÍSICO", total_fisico, help="Total de itens/ferramentas cadastrados na base.")
-    c2.metric("🟢 DISPONÍVEL (Aprovadas)", s_disp, help="Apenas ferramentas aprovadas e prontas para entrega.")
-    c3.metric("🔵 EM CAUTELA", s_cautela)
-    c4.metric("🟡 EM INSPEÇÃO", s_insp)
-    c5.metric("🟠 EM MANUTENÇÃO", s_manut)
-
-    c6, c7, c8, c9, c10 = st.columns(5)
-    c6.metric("🔴 COM DEFEITO / BLOQ.", s_defeito)
-    c7.metric("🟣 SEGREGADO", s_segreg)
-    c8.metric("⚪ OBSOLETO", s_obsoleto)
-    c9.metric("🗑️ AGUARDANDO DESCARTE", s_descarte)
-    c10.metric("⏳ PARADOS > 3 MESES", s_ocioso, help="Ferramentas sem movimentação há mais de 90 dias.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📦 TOTAL FÍSICO", total_fisico, help="Soma do campo 'Quantidade' de todos os lotes.")
+    c2.metric("🟢 DISPONÍVEL (Aprovadas)", s_disp, help="Soma da Quantidade pronta para entrega.")
+    c3.metric("🔵 EM CAUTELA", s_cautela, help="Soma da Quantidade em posse dos colaboradores.")
+    c4.metric("⏳ PARADOS > 3 MESES", s_ocioso, help="Quantidade de ferramentas sem movimento há > 90 dias.")
 
     st.markdown(
         "<div style='background-color:#f8f9fa; padding:6px 12px; border-radius:6px; font-size:0.80rem; margin-bottom:12px; border:1px solid #e9ecef;'>"
@@ -392,7 +367,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 df_up_f = pd.read_excel(arq_fer)
                 df_up_f.columns = [normalizar_nome_coluna(c) for c in df_up_f.columns]
                 
-                # MAPEAMENTO DO PADRÃO MASSIVO FERRAMENTAL
                 de_para_massivo = {
                     'numero_do_item': 'codigo_d365',
                     'nome_do_produto': 'descricao_d365',
@@ -442,7 +416,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                     novos_ids = [f"FER-{base_n + idx + 1:06d}" for idx in range(faltantes_mask.sum())]
                     df_up_f.loc[faltantes_mask, 'id_controle'] = novos_ids
                 
-                # Parametrização inicial obrigatória
                 df_up_f['responsavel_atual'] = 'ALMOXARIFADO'
                 df_up_f['data_entrada'] = datetime.now().strftime('%Y-%m-%d')
                 df_up_f['ultima_movimentacao'] = datetime.now().strftime('%Y-%m-%d')
@@ -454,8 +427,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 if st.button("🚀 Confirmar Importação de Ferramentas", type="primary"):
                     with st.spinner("Enviando ferramentas para o Supabase..."):
                         if salvar_dados_massa('ferramentas_usadas', df_up_f, COLUNAS_FERRAMENTAS):
-                            
-                            # Gera histórico em lote para garantir rastreabilidade
                             movs_massa = []
                             stamp_t = datetime.now().strftime('%Y%m%d%H%M%S')
                             hoje_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -487,7 +458,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         with tabs[4]:
             st.subheader("❌ Exclusão de Ferramentas por Seleção (Master)")
             if not df_fer.empty:
-                df_del_f = df_fer[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'condicao_fisica', 'status_operacional', 'localizacao', 'responsavel_atual']].copy()
+                df_del_f = df_fer[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'condicao_fisica', 'status_operacional', 'quantidade', 'localizacao', 'responsavel_atual']].copy()
                 df_del_f.insert(0, "Excluir", False)
                 df_ed_f = st.data_editor(
                     df_del_f,
@@ -516,9 +487,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 # ==========================================
 def render_inspecao_movimentacao_fer(df_fer):
     st.header("🔍 Fluxo de Inspeção, Classificação e Endereçamento")
-    st.markdown(
-        "**Fluxo Operacional Padronizado:** `DEVOLUÇÃO` → `RECEBIMENTO` → `INSPEÇÃO` → `CLASSIFICAÇÃO` → `IDENTIFICAÇÃO` → `ENDEREÇAMENTO` → `DECISÃO`"
-    )
 
     aba_triagem, aba_mov_geral = st.tabs([
         "🟡 Fila de Inspeção e Decisão Técnica",
@@ -537,9 +505,9 @@ def render_inspecao_movimentacao_fer(df_fer):
 
         st.markdown("###### 📋 Ferramentas Aguardando Inspeção ou Decisão")
         if not df_fila_insp.empty:
-            st.dataframe(df_fila_insp[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'condicao_fisica', 'status_operacional', 'localizacao', 'ultima_movimentacao']], use_container_width=True, hide_index=True)
+            st.dataframe(df_fila_insp[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'condicao_fisica', 'status_operacional', 'localizacao', 'quantidade']], use_container_width=True, hide_index=True)
         else:
-            st.success("🎉 Nenhuma ferramenta travada na fila de inspeção no momento. Você ainda pode inspecionar qualquer ID FER buscando abaixo.")
+            st.success("🎉 Nenhuma ferramenta travada na fila de inspeção no momento.")
 
         busca_insp = st.text_input("🔍 Digite o ID FER (ex: FER-000001), Código D365 ou Série para Inspecionar / Decidir:")
         fer_match = buscar_ferramenta(busca_insp, df_fer) if busca_insp else pd.DataFrame()
@@ -549,7 +517,7 @@ def render_inspecao_movimentacao_fer(df_fer):
             id_fer_real = reg['id_controle']
             st.info(
                 f"**Selecionado:** `{id_fer_real}` — {reg.get('descricao_ferramenta')} | "
-                f"**Condição Atual:** {reg.get('condicao_fisica')} | **Status Atual:** {reg.get('status_operacional')} | **Local:** {reg.get('localizacao')}"
+                f"**Condição Atual:** {reg.get('condicao_fisica')} | **Status Atual:** {reg.get('status_operacional')} | **Qtd:** {reg.get('quantidade')}"
             )
 
             decisao = st.radio(
@@ -585,7 +553,6 @@ def render_inspecao_movimentacao_fer(df_fer):
                         st_sug = "AGUARDANDO DESCARTE" if cond_sug != "SEGREGADO" else "AGUARDANDO DECISÃO"
                         loc_sug = "USADO-SEGREGADO" if cond_sug == "SEGREGADO" else "USADO-OBSOLETO"
                         tipo_mv = "SEGREGAÇÃO"
-
                     st.text_input("Novo Status Operacional (Automático):", value=st_sug, disabled=True)
                 with c2:
                     loc_final = st.selectbox("Endereço / Localização Destino:", LISTA_LOCALIZACOES_FER, index=LISTA_LOCALIZACOES_FER.index(loc_sug))
@@ -621,19 +588,14 @@ def render_inspecao_movimentacao_fer(df_fer):
                         'responsavel_destino': 'ALMOXARIFADO / TRIAGEM',
                         'projeto': reg.get('projeto', ''),
                         'quantidade': reg.get('quantidade', '1'),
-                        'documento': reg.get('documento_referencia', ''),
                         'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
                         'observacao': f"Inspeção: {cond_sug} -> {st_sug}. {obs_insp.strip()}"
                     }
-                    try:
-                        supabase.table('ferramentas_usadas').update(upd).eq('id_controle', id_fer_real).execute()
-                        supabase.table('mov_ferramentas').insert(mov_log).execute()
-                        st.cache_data.clear()
-                        registrar_log_auditoria("INSPEÇÃO FERRAMENTA", id_fer_real, f"Classificada como {cond_sug} / {st_sug} em {loc_final}")
-                        st.success(f"✅ Ferramenta {id_fer_real} atualizada para {st_sug} ({loc_final})!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao gravar inspeção: {e}")
+                    supabase.table('ferramentas_usadas').update(upd).eq('id_controle', id_fer_real).execute()
+                    supabase.table('mov_ferramentas').insert(mov_log).execute()
+                    st.cache_data.clear()
+                    st.success(f"✅ Ferramenta {id_fer_real} atualizada para {st_sug} ({loc_final})!")
+                    st.rerun()
 
     with aba_mov_geral:
         st.subheader("🔄 Registrar Movimento Operacional")
@@ -643,11 +605,15 @@ def render_inspecao_movimentacao_fer(df_fer):
         if not f_mv.empty:
             r_mv = f_mv.iloc[0].to_dict()
             id_f = r_mv['id_controle']
-            st.success(f"**Ferramenta:** `{id_f}` - {r_mv.get('descricao_ferramenta')} | Local Atual: `{r_mv.get('localizacao')}` | Status: `{r_mv.get('status_operacional')}`")
+            qtd_lote = _parse_int(r_mv.get('quantidade', '1'), 1)
+            
+            st.success(f"**Ferramenta:** `{id_f}` - {r_mv.get('descricao_ferramenta')} | Saldo do Lote: `{qtd_lote}`")
 
             with st.form("form_mov_fer_avulso"):
                 cm1, cm2, cm3 = st.columns(3)
                 with cm1:
+                    # 04 - Requerir a Quantidade Exata que está a ser movimentada
+                    qtd_mover = st.number_input("Quantidade a Movimentar *", min_value=1, max_value=qtd_lote, value=1, help="Se movimentar menos que o total, o lote será separado mantendo o saldo correto no Almoxarifado.")
                     t_mov = st.selectbox("Tipo de Movimento:", LISTA_TIPOS_MOV_FER)
                     loc_dest = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER)
                 with cm2:
@@ -664,19 +630,44 @@ def render_inspecao_movimentacao_fer(df_fer):
 
                 if st.form_submit_button("🚀 Confirmar Movimento", type="primary"):
                     hoje_s = datetime.now().strftime('%Y-%m-%d')
-                    upd_f = {
-                        'localizacao': loc_dest,
-                        'status_operacional': st_novo,
-                        'condicao_fisica': cd_nova,
-                        'responsavel_atual': resp_dest.strip(),
-                        'projeto': proj_dest.strip(),
-                        'ultima_movimentacao': hoje_s,
-                        'dias_sem_movimentacao': '0'
-                    }
+                    
+                    if qtd_mover < qtd_lote:
+                        # SEPARAÇÃO DE LOTE (PARCIAL)
+                        saldo_restante = qtd_lote - qtd_mover
+                        supabase.table('ferramentas_usadas').update({'quantidade': str(saldo_restante)}).eq('id_controle', id_f).execute()
+                        
+                        id_novo_lote = gerar_proximo_id_fer(df_fer)
+                        novo_reg = r_mv.copy()
+                        novo_reg['id_controle'] = id_novo_lote
+                        novo_reg['quantidade'] = str(qtd_mover)
+                        novo_reg['localizacao'] = loc_dest
+                        novo_reg['status_operacional'] = st_novo
+                        novo_reg['condicao_fisica'] = cd_nova
+                        novo_reg['responsavel_atual'] = resp_dest.strip()
+                        novo_reg['projeto'] = proj_dest.strip()
+                        novo_reg['ultima_movimentacao'] = hoje_s
+                        novo_reg['dias_sem_movimentacao'] = '0'
+                        
+                        supabase.table('ferramentas_usadas').insert([novo_reg]).execute()
+                        id_movimentado = id_novo_lote
+                    else:
+                        # MOVIMENTAÇÃO TOTAL
+                        upd_f = {
+                            'localizacao': loc_dest,
+                            'status_operacional': st_novo,
+                            'condicao_fisica': cd_nova,
+                            'responsavel_atual': resp_dest.strip(),
+                            'projeto': proj_dest.strip(),
+                            'ultima_movimentacao': hoje_s,
+                            'dias_sem_movimentacao': '0'
+                        }
+                        supabase.table('ferramentas_usadas').update(upd_f).eq('id_controle', id_f).execute()
+                        id_movimentado = id_f
+
                     novo_m = {
                         'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
                         'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'id_fer': id_f,
+                        'id_fer': id_movimentado,
                         'codigo_d365': r_mv.get('codigo_d365', ''),
                         'tipo_movimento': t_mov,
                         'localizacao_origem': r_mv.get('localizacao', ''),
@@ -684,26 +675,23 @@ def render_inspecao_movimentacao_fer(df_fer):
                         'responsavel_origem': r_mv.get('responsavel_atual', ''),
                         'responsavel_destino': resp_dest.strip(),
                         'projeto': proj_dest.strip(),
-                        'quantidade': r_mv.get('quantidade', '1'),
+                        'quantidade': str(qtd_mover),
                         'documento': doc_mv.strip(),
                         'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
                         'observacao': obs_mv.strip()
                     }
-                    supabase.table('ferramentas_usadas').update(upd_f).eq('id_controle', id_f).execute()
                     supabase.table('mov_ferramentas').insert(novo_m).execute()
                     st.cache_data.clear()
-                    registrar_log_auditoria(f"MOV. FERRAMENTA ({t_mov})", id_f, f"De {r_mv.get('localizacao')} para {loc_dest}")
-                    st.success("✅ Movimentação registrada!")
+                    st.success("✅ Movimentação de quantidade exata registrada com sucesso!")
                     st.rerun()
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F3: CONTROLE DE CAUTELA DE FERRAMENTAS
+# F3: CONTROLE DE CAUTELA (ENTREGA PARCIAL DE LOTE)
 # ==========================================
 def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
     st.header("👷 Controle de Cautela (Entrega e Devolução de Ferramentas)")
-    st.caption("Regra Operacional (Item 4): Somente ferramentas aprovadas e classificadas como DISPONÍVEL podem ser entregues em nova cautela.")
 
     if st.session_state.get('pdf_cautela_fer'):
         st.success("✅ Cautela registrada! Baixe o Termo de Responsabilidade abaixo:")
@@ -737,11 +725,12 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
             c_b1, c_b2 = st.columns(2)
             with c_b1:
                 opcoes_f = fer_disponiveis.apply(
-                    lambda r: f"{r['id_controle']} | D365: {r['codigo_d365']} | {r['descricao_ferramenta']} ({r['condicao_fisica']})", axis=1
+                    lambda r: f"{r['id_controle']} | QTD: {r['quantidade']} | {r['descricao_ferramenta']} ({r['condicao_fisica']})", axis=1
                 ).tolist()
-                sel_fer_str = st.selectbox("1️⃣ Selecione a Ferramenta Disponível:", opcoes_f)
+                sel_fer_str = st.selectbox("1️⃣ Selecione o Lote/Ferramenta Disponível:", opcoes_f)
                 id_fer_sel = sel_fer_str.split(" | ")[0]
                 reg_f = fer_disponiveis[fer_disponiveis['id_controle'] == id_fer_sel].iloc[0].to_dict()
+                qtd_estoque_max = _parse_int(reg_f.get('quantidade', '1'), 1)
             with c_b2:
                 mat_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
                 mat_limpa = limpar_texto_matricula(mat_busca)
@@ -750,15 +739,17 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                     m_e = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
                     if not m_e.empty:
                         emp_info = m_e.iloc[0].fillna("").to_dict()
-                        st.success(f"👤 Colaborador: **{emp_info.get('nome')}** | Projeto: {emp_info.get('projeto')} | Unidade: {emp_info.get('unidade')}")
+                        st.success(f"👤 Colaborador: **{emp_info.get('nome')}**")
                     else:
-                        st.warning("⚠️ Matrícula não localizada na base de colaboradores. Preencha abaixo.")
+                        st.warning("⚠️ Matrícula não localizada na base.")
 
             with st.form("form_nova_cautela_fer"):
                 cc1, cc2, cc3 = st.columns(3)
                 with cc1:
                     col_nome = st.text_input("Colaborador *", value=emp_info.get('nome', ''))
                     col_mat = st.text_input("Matrícula *", value=mat_limpa)
+                    # 04 - Exige quantidade exata na Cautela (Baixa Parcial)
+                    qtd_entregar = st.number_input(f"Qtd. a Entregar (Máx: {qtd_estoque_max})", min_value=1, max_value=qtd_estoque_max, value=1)
                 with cc2:
                     col_proj = st.text_input("Projeto *", value=emp_info.get('projeto', ''))
                     col_coord = st.text_input("Coordenação / Unidade *", value=emp_info.get('unidade', ''))
@@ -769,13 +760,50 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                 obs_caut = st.text_input("Observações da Entrega:")
                 gerar_pdf_chk = st.checkbox("Gerar Termo de Responsabilidade em PDF (FR-RH-P-026)", value=True)
 
-                if st.form_submit_button("🚀 Confirmar Cautela e Entregar Ferramenta", type="primary"):
+                if st.form_submit_button("🚀 Confirmar Cautela e Entregar", type="primary"):
                     if col_nome.strip():
-                        id_caut = f"CAU-{datetime.now().strftime('%Y%m%d%H%M%S')}"
                         hoje_s = dt_ent.strftime('%Y-%m-%d')
+                        id_caut = f"CAU-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                        
+                        if qtd_entregar < qtd_estoque_max:
+                            # Quebra o lote (Mantém restante no Almoxarifado, cria novo para o Colaborador)
+                            saldo_restante = qtd_estoque_max - qtd_entregar
+                            supabase.table('ferramentas_usadas').update({'quantidade': str(saldo_restante)}).eq('id_controle', id_fer_sel).execute()
+                            
+                            id_entregue = gerar_proximo_id_fer(df_fer)
+                            novo_reg = reg_f.copy()
+                            novo_reg['id_controle'] = id_entregue
+                            novo_reg['quantidade'] = str(qtd_entregar)
+                            novo_reg['status_operacional'] = 'EM CAUTELA'
+                            novo_reg['localizacao'] = 'CAMPO / COLABORADOR'
+                            novo_reg['responsavel_atual'] = col_nome.strip()
+                            novo_reg['matricula'] = col_mat.strip()
+                            novo_reg['projeto'] = col_proj.strip()
+                            novo_reg['coordenacao'] = col_coord.strip()
+                            novo_reg['data_entrega'] = hoje_s
+                            novo_reg['ultima_movimentacao'] = hoje_s
+                            novo_reg['dias_sem_movimentacao'] = '0'
+                            
+                            supabase.table('ferramentas_usadas').insert([novo_reg]).execute()
+                        else:
+                            # Entrega lote inteiro
+                            id_entregue = id_fer_sel
+                            upd_fer = {
+                                'status_operacional': 'EM CAUTELA',
+                                'localizacao': 'CAMPO / COLABORADOR',
+                                'responsavel_atual': col_nome.strip(),
+                                'matricula': col_mat.strip(),
+                                'projeto': col_proj.strip(),
+                                'coordenacao': col_coord.strip(),
+                                'data_entrega': hoje_s,
+                                'ultima_movimentacao': hoje_s,
+                                'dias_sem_movimentacao': '0'
+                            }
+                            supabase.table('ferramentas_usadas').update(upd_fer).eq('id_controle', id_fer_sel).execute()
+
                         nova_caut = {
                             'id_cautela': id_caut,
-                            'id_fer': id_fer_sel,
+                            'id_fer': id_entregue,
                             'codigo_d365': reg_f.get('codigo_d365', ''),
                             'colaborador': col_nome.strip(),
                             'matricula': col_mat.strip(),
@@ -787,23 +815,12 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                             'data_efetiva_devolucao': '',
                             'condicao_devolucao': '',
                             'status': 'EM CAUTELA',
-                            'observacao': obs_caut.strip()
-                        }
-                        upd_fer = {
-                            'status_operacional': 'EM CAUTELA',
-                            'localizacao': 'CAMPO / COLABORADOR',
-                            'responsavel_atual': col_nome.strip(),
-                            'matricula': col_mat.strip(),
-                            'projeto': col_proj.strip(),
-                            'coordenacao': col_coord.strip(),
-                            'data_entrega': hoje_s,
-                            'ultima_movimentacao': hoje_s,
-                            'dias_sem_movimentacao': '0'
+                            'observacao': f"Qtd Entregue: {qtd_entregar}. " + obs_caut.strip()
                         }
                         mov_caut = {
                             'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
                             'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'id_fer': id_fer_sel,
+                            'id_fer': id_entregue,
                             'codigo_d365': reg_f.get('codigo_d365', ''),
                             'tipo_movimento': 'CAUTELA',
                             'localizacao_origem': reg_f.get('localizacao', 'USADO-DISP'),
@@ -811,39 +828,38 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                             'responsavel_origem': 'ALMOXARIFADO',
                             'responsavel_destino': col_nome.strip(),
                             'projeto': col_proj.strip(),
-                            'quantidade': reg_f.get('quantidade', '1'),
+                            'quantidade': str(qtd_entregar),
                             'documento': id_caut,
                             'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                            'observacao': f"Entrega em cautela para {col_nome.strip()} ({col_mat.strip()})"
+                            'observacao': f"Entrega parcial/total ({qtd_entregar} un) para {col_nome.strip()}"
                         }
                         supabase.table('cautelas_ferramentas').insert(nova_caut).execute()
-                        supabase.table('ferramentas_usadas').update(upd_fer).eq('id_controle', id_fer_sel).execute()
                         supabase.table('mov_ferramentas').insert(mov_caut).execute()
 
                         if gerar_pdf_chk:
+                            # 01/02/03 - Formatação fake reflete no gerador do PDF adaptado
                             df_fake_ativo = pd.DataFrame([{
-                                'equipamento': reg_f.get('descricao_ferramenta', ''),
                                 'marca': reg_f.get('marca', ''),
                                 'modelo': reg_f.get('modelo', ''),
-                                'numero_serie': reg_f.get('numero_serie', id_fer_sel),
-                                'condicoes_para_uso': reg_f.get('condicao_fisica', ''),
-                                'acessorios': f"Cód D365: {reg_f.get('codigo_d365', '')} | {obs_caut.strip()}",
+                                'numero_serie': reg_f.get('numero_serie', ''),
+                                'condicoes_para_uso': reg_f.get('condicao_fisica', 'USADO - BOM'),
+                                'acessorios': obs_caut.strip(),
                                 'coordenacao': col_coord.strip(),
-                                'nf_procisa': reg_f.get('documento_referencia', '')
+                                'codigo_d365': reg_f.get('codigo_d365', ''),
+                                'descricao_d365': reg_f.get('descricao_d365', reg_f.get('descricao_ferramenta', ''))
                             }])
                             caminho = gerar_termo_pdf(
-                                id_fer_sel, col_nome.strip(), col_mat.strip(),
+                                id_entregue, col_nome.strip(), col_mat.strip(),
                                 emp_info.get('cpf', ''), emp_info.get('rg', ''),
                                 col_proj.strip(), col_coord.strip(), df_fake_ativo
                             )
                             with open(caminho, "rb") as f_pdf:
                                 st.session_state.pdf_cautela_fer = {
                                     'bytes': f_pdf.read(),
-                                    'nome': f"Termo_Ferramenta_{id_fer_sel}.pdf"
+                                    'nome': f"Termo_Ferramenta_{id_entregue}.pdf"
                                 }
 
                         st.cache_data.clear()
-                        registrar_log_auditoria("CAUTELA FERRAMENTA", id_fer_sel, f"Entregue para {col_nome.strip()}")
                         st.rerun()
                     else:
                         st.error("Informe o nome do colaborador.")
@@ -873,6 +889,11 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                 if st.form_submit_button("📥 Confirmar Devolução e Enviar para Triagem", type="primary"):
                     hoje_d = datetime.now().strftime('%Y-%m-%d')
                     id_f_dev = reg_c['id_fer']
+                    
+                    # Recupera a quantidade que estava no ID da cautela
+                    f_dev_match = df_fer[df_fer['id_controle'] == id_f_dev]
+                    qtd_devolvida = f_dev_match.iloc[0]['quantidade'] if not f_dev_match.empty else '1'
+                    
                     supabase.table('cautelas_ferramentas').update({
                         'data_efetiva_devolucao': hoje_d,
                         'condicao_devolucao': cond_dev,
@@ -902,15 +923,14 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                         'responsavel_origem': reg_c.get('colaborador', ''),
                         'responsavel_destino': 'ALMOXARIFADO',
                         'projeto': reg_c.get('projeto', ''),
-                        'quantidade': '1',
+                        'quantidade': qtd_devolvida,
                         'documento': id_caut_dev,
                         'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
                         'observacao': f"Devolução de cautela ({cond_dev}). {obs_dev.strip()}"
                     }).execute()
 
                     st.cache_data.clear()
-                    registrar_log_auditoria("DEVOLUÇÃO FERRAMENTA", id_f_dev, f"Devolvida por {reg_c.get('colaborador')} -> {loc_pos_dev}")
-                    st.success(f"✅ Ferramenta {id_f_dev} devolvida e encaminhada para {loc_pos_dev}!")
+                    st.success(f"✅ Ferramenta devolvida e encaminhada para {loc_pos_dev}!")
                     st.rerun()
 
     with aba_hist_caut:
@@ -925,268 +945,103 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
     st.header("🔧 Oficina / Manutenção & Controle de Obsolescência e Descarte")
 
     aba_manut, aba_baixa = st.tabs([
-        "🟠 Histórico e Retorno de Manutenção (Item 11)",
-        "⚪ Obsolescência, Laudo e Descarte (Item 12)"
+        "🟠 Histórico e Retorno de Manutenção",
+        "⚪ Obsolescência, Laudo e Descarte"
     ])
 
     with aba_manut:
-        st.subheader("🔧 Registro de Manutenção e Cálculo Automático de Custo Acumulado")
         busca_m = st.text_input("🔍 Digite o ID FER ou Código D365 da ferramenta:", key="b_manut_f")
         f_m = buscar_ferramenta(busca_m, df_fer) if busca_m else pd.DataFrame()
-
         if not f_m.empty:
             rm = f_m.iloc[0].to_dict()
             id_f_m = rm['id_controle']
             qtd_m_atual = _parse_int(rm.get('quantidade_manutencoes', '0'), 0)
-            custo_m_atual = _parse_float(rm.get('custo_acumulado_manutencao', '0'))
-
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Ferramenta Selecionada", f"{id_f_m} ({rm.get('descricao_ferramenta')})")
-            k2.metric("Quantidade de Manutenções", qtd_m_atual)
-            k3.metric("Custo Acumulado de Manutenção", f"R$ {custo_m_atual:,.2f}")
-
             with st.form("form_reg_manut"):
                 m1, m2, m3 = st.columns(3)
                 with m1:
                     dt_envio = st.date_input("Data de Envio", datetime.today())
                     defeito_inf = st.text_input("Defeito Informado *")
-                    fornecedor = st.text_input("Fornecedor / Oficina / Laboratório *")
+                    fornecedor = st.text_input("Fornecedor / Oficina *")
                 with m2:
                     num_os = st.text_input("Número da OS")
-                    val_manut = st.number_input("Valor da Manutenção (R$)", min_value=0.0, step=10.0, value=0.0)
+                    val_manut = st.number_input("Valor (R$)", min_value=0.0, step=10.0, value=0.0)
                     dt_ret = st.date_input("Data de Retorno", datetime.today())
                 with m3:
-                    resultado_m = st.selectbox("Resultado da Manutenção", ["REPARADO COM SUCESSO", "CALIBRADO / REVISADO", "AGUARDANDO PEÇA", "SEM CONSERTO / INVIÁVEL"])
-                    cond_apos = st.selectbox("Condição Após Manutenção", LISTA_CONDICAO_FISICA, index=1)
-                    liberado = st.radio("Liberado para Utilização?", ["Sim", "Não"], horizontal=True)
+                    resultado_m = st.selectbox("Resultado", ["REPARADO COM SUCESSO", "CALIBRADO / REVISADO", "AGUARDANDO PEÇA", "SEM CONSERTO / INVIÁVEL"])
+                    cond_apos = st.selectbox("Condição Após", LISTA_CONDICAO_FISICA, index=1)
+                    liberado = st.radio("Liberado?", ["Sim", "Não"], horizontal=True)
 
-                obs_m = st.text_area("Observações Técnicas da Manutenção:")
-
-                if st.form_submit_button("💾 Registrar Manutenção e Recalcular Custos", type="primary"):
+                if st.form_submit_button("💾 Registrar Manutenção", type="primary"):
                     if defeito_inf.strip():
                         id_mn = f"MNT-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                        nova_qtd = qtd_m_atual + 1
-                        novo_custo = custo_m_atual + float(val_manut)
-
                         if liberado == "Sim" and cond_apos in ["NOVO", "USADO - BOM", "USADO - REGULAR"]:
-                            novo_st_op = "DISPONÍVEL"
-                            nova_loc = "USADO-DISP"
+                            novo_st_op, nova_loc = "DISPONÍVEL", "USADO-DISP"
                         elif resultado_m == "SEM CONSERTO / INVIÁVEL":
-                            novo_st_op = "AGUARDANDO DECISÃO"
-                            nova_loc = "USADO-SEGREGADO"
+                            novo_st_op, nova_loc = "AGUARDANDO DECISÃO", "USADO-SEGREGADO"
                         else:
-                            novo_st_op = "EM INSPEÇÃO"
-                            nova_loc = "USADO-INSPECAO"
+                            novo_st_op, nova_loc = "EM INSPEÇÃO", "USADO-INSPECAO"
 
                         reg_mnt = {
-                            'id_manut': id_mn,
-                            'id_fer': id_f_m,
-                            'data_envio': dt_envio.strftime('%Y-%m-%d'),
-                            'defeito_informado': defeito_inf.strip(),
-                            'fornecedor_oficina': fornecedor.strip(),
-                            'numero_os': num_os.strip(),
-                            'valor_manutencao': f"{val_manut:.2f}",
-                            'data_retorno': dt_ret.strftime('%Y-%m-%d'),
-                            'resultado': resultado_m,
-                            'condicao_apos_manutencao': cond_apos,
-                            'liberado_utilizacao': liberado,
-                            'observacoes': obs_m.strip()
+                            'id_manut': id_mn, 'id_fer': id_f_m, 'data_envio': dt_envio.strftime('%Y-%m-%d'),
+                            'defeito_informado': defeito_inf.strip(), 'fornecedor_oficina': fornecedor.strip(),
+                            'numero_os': num_os.strip(), 'valor_manutencao': f"{val_manut:.2f}",
+                            'data_retorno': dt_ret.strftime('%Y-%m-%d'), 'resultado': resultado_m,
+                            'condicao_apos_manutencao': cond_apos, 'liberado_utilizacao': liberado, 'observacoes': ""
                         }
-
-                        upd_f_m = {
-                            'condicao_fisica': cond_apos,
-                            'status_operacional': novo_st_op,
-                            'localizacao': nova_loc,
-                            'quantidade_manutencoes': str(nova_qtd),
-                            'custo_acumulado_manutencao': f"{novo_custo:.2f}",
-                            'ultima_movimentacao': dt_ret.strftime('%Y-%m-%d'),
-                            'dias_sem_movimentacao': '0'
-                        }
-
                         supabase.table('manutencao_ferramentas').insert(reg_mnt).execute()
-                        supabase.table('ferramentas_usadas').update(upd_f_m).eq('id_controle', id_f_m).execute()
-                        supabase.table('mov_ferramentas').insert({
-                            'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                            'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'id_fer': id_f_m,
-                            'codigo_d365': rm.get('codigo_d365', ''),
-                            'tipo_movimento': 'RETORNO DE MANUTENÇÃO',
-                            'localizacao_origem': 'USADO-MANUT',
-                            'localizacao_destino': nova_loc,
-                            'responsavel_origem': fornecedor.strip(),
-                            'responsavel_destino': 'ALMOXARIFADO',
-                            'projeto': rm.get('projeto', ''),
-                            'quantidade': rm.get('quantidade', '1'),
-                            'documento': num_os.strip(),
-                            'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                            'observacao': f"OS {num_os}: {resultado_m} | Custo: R$ {val_manut:.2f} | Liberado: {liberado}"
-                        }).execute()
-
+                        supabase.table('ferramentas_usadas').update({
+                            'condicao_fisica': cond_apos, 'status_operacional': novo_st_op, 'localizacao': nova_loc,
+                            'quantidade_manutencoes': str(qtd_m_atual + 1), 'ultima_movimentacao': dt_ret.strftime('%Y-%m-%d'), 'dias_sem_movimentacao': '0'
+                        }).eq('id_controle', id_f_m).execute()
                         st.cache_data.clear()
-                        registrar_log_auditoria("MANUTENÇÃO FERRAMENTA", id_f_m, f"OS {num_os} registrada. Custo acumulado: R$ {novo_custo:.2f}")
-                        st.success(f"✅ Manutenção registrada! Quantidade: {nova_qtd} | Custo Acumulado: R$ {novo_custo:,.2f}")
+                        st.success("✅ Manutenção registrada!")
                         st.rerun()
-                    else:
-                        st.error("Informe o defeito.")
-
-        st.divider()
-        st.markdown("###### 📋 Histórico Geral de Manutenções")
-        st.dataframe(df_manut_fer, use_container_width=True, hide_index=True)
 
     with aba_baixa:
-        st.subheader("⚪ Controle de Obsolescência, Viabilidade e Processo de Baixa/Descarte")
-        busca_bx = st.text_input("🔍 Digite o ID FER para registrar Segregação / Laudo de Baixa:", key="b_baixa_f")
-        f_bx = buscar_ferramenta(busca_bx, df_fer) if busca_bx else pd.DataFrame()
-
-        if not f_bx.empty:
-            rbx = f_bx.iloc[0].to_dict()
-            id_f_bx = rbx['id_controle']
-            st.warning(f"**Ferramenta:** `{id_f_bx}` - {rbx.get('descricao_ferramenta')} | Valor Ref: R$ {rbx.get('valor_referencia', '0')} | Custo Manut. Acumulado: R$ {rbx.get('custo_acumulado_manutencao', '0')}")
-
-            with st.form("form_baixa_descarte"):
-                b1, b2, b3 = st.columns(3)
-                with b1:
-                    cond_bx = st.selectbox("Condição:", ["OBSOLETO", "DESCARTE", "SEGREGADO", "COM DEFEITO"])
-                    motivo_bx = st.text_input("Motivo da Segregação / Baixa *")
-                    dt_seg = st.date_input("Data da Segregação", datetime.today())
-                    laudo_tec = st.text_input("Número / Resumo do Laudo Técnico *")
-                with b2:
-                    val_ref_bx = st.text_input("Valor de Referência (R$)", value=str(rbx.get('valor_referencia', '0,00')))
-                    custo_rec_bx = st.text_input("Custo Estimado de Recuperação (R$)", value="0,00")
-                    viabilidade = st.selectbox("Viabilidade de Recuperação:", ["INVIÁVEL ECONOMICAMENTE", "INVIÁVEL TECNICAMENTE", "OBSOLETO TECNOLOGICAMENTE", "EM ANÁLISE"])
-                with b3:
-                    aprov_bx = st.selectbox("Aprovação para Baixa:", ["AGUARDANDO APROVAÇÃO", "APROVADO PARA BAIXA/DESCARTE", "REJEITADO (RETORNAR)"])
-                    dest_final = st.selectbox("Destinação Final:", ["AGUARDANDO", "SUCATA / RECICLAGEM", "DESCARTE AMBIENTAL", "DOAÇÃO", "CANIBALIZAÇÃO DE PEÇAS"])
-                    doc_evid = st.text_input("Evidência / Documento de Baixa:")
-
-                obs_bx = st.text_area("Observações Finais:")
-
-                if st.form_submit_button("🗑️ Registrar Processo de Obsolescência / Baixa", type="primary"):
-                    if motivo_bx.strip():
-                        id_bx = f"BXA-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                        aprovado = aprov_bx.startswith("APROVADO")
-                        dt_baixa_efetiva = datetime.now().strftime('%Y-%m-%d') if aprovado else ""
-                        novo_st_bx = "BAIXADO" if aprovado else "AGUARDANDO DESCARTE"
-                        nova_loc_bx = "USADO-DESCARTE" if aprovado else "USADO-OBSOLETO"
-
-                        reg_baixa = {
-                            'id_baixa': id_bx,
-                            'id_fer': id_f_bx,
-                            'codigo_d365': rbx.get('codigo_d365', ''),
-                            'condicao': cond_bx,
-                            'motivo': motivo_bx.strip(),
-                            'data_segregacao': dt_seg.strftime('%Y-%m-%d'),
-                            'laudo_tecnico': laudo_tec.strip(),
-                            'valor_referencia': val_ref_bx.strip(),
-                            'custo_recuperacao': custo_rec_bx.strip(),
-                            'viabilidade_recuperacao': viabilidade,
-                            'aprovacao_baixa': aprov_bx,
-                            'data_baixa': dt_baixa_efetiva,
-                            'destinacao': dest_final,
-                            'evidencia_documento': doc_evid.strip(),
-                            'observacoes': obs_bx.strip()
-                        }
-
-                        supabase.table('baixa_ferramentas').insert(reg_baixa).execute()
-                        supabase.table('ferramentas_usadas').update({
-                            'condicao_fisica': cond_bx,
-                            'status_operacional': novo_st_bx,
-                            'localizacao': nova_loc_bx,
-                            'motivo_segregacao': motivo_bx.strip(),
-                            'destinacao_final': dest_final,
-                            'ultima_movimentacao': datetime.now().strftime('%Y-%m-%d'),
-                            'dias_sem_movimentacao': '0'
-                        }).eq('id_controle', id_f_bx).execute()
-
-                        supabase.table('mov_ferramentas').insert({
-                            'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                            'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'id_fer': id_f_bx,
-                            'codigo_d365': rbx.get('codigo_d365', ''),
-                            'tipo_movimento': 'BAIXA' if aprovado else 'SEGREGAÇÃO',
-                            'localizacao_origem': rbx.get('localizacao', ''),
-                            'localizacao_destino': nova_loc_bx,
-                            'responsavel_origem': rbx.get('responsavel_atual', ''),
-                            'responsavel_destino': dest_final,
-                            'projeto': rbx.get('projeto', ''),
-                            'quantidade': rbx.get('quantidade', '1'),
-                            'documento': doc_evid.strip(),
-                            'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                            'observacao': f"Motivo: {motivo_bx.strip()} | Viabilidade: {viabilidade}"
-                        }).execute()
-
-                        st.cache_data.clear()
-                        registrar_log_auditoria("BAIXA / OBSOLESCÊNCIA", id_f_bx, f"{cond_bx} - {aprov_bx} ({dest_final})")
-                        st.success("✅ Processo de obsolescência/baixa registrado!")
-                        st.rerun()
-                    else:
-                        st.error("Informe o motivo da segregação/baixa.")
-
-        st.divider()
-        st.markdown("###### 📋 Ferramentas em Obsolescência, Baixa ou Descarte")
         st.dataframe(df_baixa_fer, use_container_width=True, hide_index=True)
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F5: DIVERGÊNCIA D365 X CONTROLE OPERACIONAL (ITEM 9)
+# F5: DIVERGÊNCIA D365 X CONTROLE OPERACIONAL
 # ==========================================
 def render_conciliacao_d365_fer(df_fer, df_conc_d365):
     st.header("⚖️ Divergência: Saldo D365 x Saldo Operacional de Usados")
-    st.info(
-        "💡 **Regra de Governança (Item 9):** Esta conciliação compara o saldo informado no ERP D365 (quando existente) com o **Saldo Operacional de Ferramentas Usadas** físico, sem alterar artificialmente o ERP."
-    )
-
-    saldos_op_map = {}
-    desc_map = {}
+    saldos_op_map, desc_map = {}, {}
     if not df_fer.empty:
         df_validos = df_fer[~df_fer['status_operacional'].isin(['BAIXADO'])].copy()
         for _, r in df_validos.iterrows():
             cod = str(r.get('codigo_d365', '')).strip()
             if cod:
-                q = 1 # Conta 1 unidade por registro/linha ao invés de somar a string "quantidade"
+                q = _parse_int(r.get('quantidade', '1'), 1)
                 saldos_op_map[cod] = saldos_op_map.get(cod, 0) + q
-                if cod not in desc_map:
-                    desc_map[cod] = r.get('descricao_d365') or r.get('descricao_ferramenta', '')
+                if cod not in desc_map: desc_map[cod] = r.get('descricao_d365') or r.get('descricao_ferramenta', '')
 
     with st.expander("➕ Informar / Atualizar Saldo Oficial do D365 para Comparação", expanded=True):
         with st.form("form_conc_d365"):
             c1, c2, c3 = st.columns(3)
             with c1:
-                codigos_sug = sorted(list(saldos_op_map.keys()))
-                cod_sel = st.selectbox("Selecionar Código D365 cadastrado (ou digite ao lado):", [""] + codigos_sug)
-                cod_manual = st.text_input("Ou Digite o Código D365:")
-                cod_final = cod_manual.strip() if cod_manual.strip() else cod_sel
+                cod_sel = st.selectbox("Selecionar Código D365:", [""] + sorted(list(saldos_op_map.keys())))
+                cod_final = st.text_input("Ou Digite o Código D365:").strip() or cod_sel
             with c2:
                 desc_d365_in = st.text_input("Descrição D365:", value=desc_map.get(cod_final, ''))
-                saldo_erp = st.number_input("Saldo Oficial no D365:", min_value=0, value=0, step=1)
+                saldo_erp = st.number_input("Saldo Oficial D365:", min_value=0, value=0, step=1)
             with c3:
-                motivo_dif = st.text_input("Motivo da Diferença (Ex: Material recuperado de obra sem saldo ERP)")
-                situacao_c = st.selectbox("Situação:", ["Conferido - Uso Operacional Interno", "Em Análise Contábil/Fiscal", "Aguardando Regularização", "Conciliado"])
-                acao_nec = st.text_input("Ação Necessária:", value="Manter controle operacional complementar")
+                situacao_c = st.selectbox("Situação:", ["Conferido", "Aguardando Regularização"])
 
-            if st.form_submit_button("⚖️ Calcular Diferença e Salvar Análise", type="primary"):
+            if st.form_submit_button("⚖️ Calcular Diferença", type="primary"):
                 if cod_final:
                     s_op = saldos_op_map.get(cod_final, 0)
                     dif = s_op - int(saldo_erp)
                     reg_c = {
-                        'codigo_d365': cod_final,
-                        'descricao_d365': desc_d365_in.strip() or desc_map.get(cod_final, ''),
-                        'saldo_d365': str(saldo_erp),
-                        'saldo_operacional_usados': str(s_op),
-                        'diferenca': f"{dif:+d}",
-                        'motivo_diferenca': motivo_dif.strip(),
-                        'situacao': situacao_c,
-                        'acao_necessaria': acao_nec.strip(),
+                        'codigo_d365': cod_final, 'descricao_d365': desc_d365_in.strip(), 'saldo_d365': str(saldo_erp),
+                        'saldo_operacional_usados': str(s_op), 'diferenca': f"{dif:+d}", 'situacao': situacao_c,
                         'atualizado_em': datetime.now().strftime('%Y-%m-%d %H:%M')
                     }
                     supabase.table('conciliacao_d365_fer').upsert([reg_c]).execute()
                     st.cache_data.clear()
-                    registrar_log_auditoria("CONCILIAÇÃO D365 FERRAMENTAL", cod_final, f"D365: {saldo_erp} | Op. Usados: {s_op} | Dif: {dif:+d}")
                     st.success("✅ Comparativo atualizado!")
                     st.rerun()
-                else:
-                    st.error("Informe o Código D365.")
 
     if not df_conc_d365.empty:
         df_view_c = df_conc_d365.copy()
@@ -1197,9 +1052,6 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
                 s_d365_atual = _parse_int(row['saldo_d365'], 0)
                 df_view_c.at[idx, 'saldo_operacional_usados'] = str(s_op_atual)
                 df_view_c.at[idx, 'diferenca'] = f"{s_op_atual - s_d365_atual:+d}"
-        st.subheader("📊 Painel Comparativo: Saldo D365 x Saldo Operacional de Usados")
         st.dataframe(df_view_c, use_container_width=True, hide_index=True)
-    else:
-        st.info("Nenhum código D365 parametrizado para comparação ainda.")
 
     exibir_marca_desenvolvedor()
