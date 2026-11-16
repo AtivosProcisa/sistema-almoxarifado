@@ -27,14 +27,7 @@ def gerar_backup_completo_excel(dict_dfs):
             df_item.to_excel(writer, index=False, sheet_name=nome_aba[:31])
     return output.getvalue()
 
-def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidade, info_ativo):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    
-    data_atual = datetime.now().strftime("%d/%m/%Y")
-    
-    # Cabeçalho Página 1
+def _desenhar_cabecalho_procisa(pdf, data_atual, num_pag):
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
     pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
@@ -44,9 +37,18 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border='LBR', align='C')
     pdf.cell(100, 5, txt=limpar_texto_pdf("REF."), border='LBR', align='C')
     pdf.cell(25, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
-    pdf.cell(25, 5, txt=limpar_texto_pdf("- 1 -"), border=1, ln=True, align='C')
+    pdf.cell(25, 5, txt=limpar_texto_pdf(f"- {num_pag} -"), border=1, ln=True, align='C')
+    pdf.ln(4)
+
+def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidade, info_ativo):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=False)
+    pdf.add_page()
     
-    pdf.ln(5)
+    data_atual = datetime.now().strftime("%d/%m/%Y")
+    
+    # --- PÁGINA 1: CLÁUSULAS CONTRATUAIS ---
+    _desenhar_cabecalho_procisa(pdf, data_atual, 1)
     
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 10, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), ln=True, align='C')
@@ -56,8 +58,7 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"RG: {rg}      CPF/MF: {cpf}      Matrícula: {matricula}"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"Área: {unidade}"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"Projeto: {projeto}"), ln=True)
-    
-    pdf.ln(5)
+    pdf.ln(4)
     
     pdf.set_font("Arial", '', 9)
     clausulas = [
@@ -73,79 +74,88 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
         pdf.multi_cell(0, 5, txt=limpar_texto_pdf(clausula))
         pdf.ln(3)
         
-    pdf.ln(10)
+    pdf.ln(8)
     pdf.cell(90, 10, txt="___________________________________", align='C')
     pdf.cell(90, 10, txt="___________________________________", ln=True, align='C')
     pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
     pdf.cell(90, 5, txt=limpar_texto_pdf("COORDENADOR/RESPONSÁVEL"), ln=True, align='C')
     
-    # --- PÁGINA 2 ---
+    # --- PÁGINA 2 (E SEGUINTES, SE HOUVER MUITAS FERRAMENTAS) ---
+    num_pagina_atual = 2
     pdf.add_page()
-    
-    pdf.set_font("Arial", 'B', 10)
-    pdf.cell(40, 5, txt=limpar_texto_pdf("PROCISA"), border='LTR', align='C')
-    pdf.cell(100, 5, txt=limpar_texto_pdf("TERMO DE RESPONSABILIDADE DE EQUIPAMENTOS"), border='LTR', align='C')
-    pdf.cell(25, 5, txt=limpar_texto_pdf("DATA"), border=1, align='C')
-    pdf.cell(25, 5, txt=limpar_texto_pdf("PÁG."), border=1, ln=True, align='C')
-    
-    pdf.cell(40, 5, txt=limpar_texto_pdf("FR-RH-P-026 Rev 07 / Jul 13"), border='LBR', align='C')
-    pdf.cell(100, 5, txt=limpar_texto_pdf("REF."), border='LBR', align='C')
-    pdf.cell(25, 5, txt=limpar_texto_pdf(data_atual), border=1, align='C')
-    pdf.cell(25, 5, txt=limpar_texto_pdf("- 2 -"), border=1, ln=True, align='C')
-    
-    pdf.ln(5)
+    _desenhar_cabecalho_procisa(pdf, data_atual, num_pagina_atual)
     
     pdf.set_font("Arial", 'B', 10)
     pdf.cell(95, 8, txt=limpar_texto_pdf(f"ENTREGA: {data_atual}"), border=1)
     pdf.cell(95, 8, txt=limpar_texto_pdf("DEVOLUÇÃO: ___/___/___"), border=1, ln=True)
-    
     pdf.ln(4)
     
-    # 01/02/03 - Preenche até 5 itens (Caso seja entrega múltipla)
+    coordenador = unidade
+    nf_procisa = ""
+    total_itens = len(info_ativo)
+    
+    # Item 09: Inclui automaticamente quantos itens forem necessários, criando novas páginas se passar do limite vertical
     for idx, reg_ativo in info_ativo.reset_index(drop=True).iterrows():
-        if idx >= 5:
-            break
+        if pdf.get_y() > 225:
+            num_pagina_atual += 1
+            pdf.add_page()
+            _desenhar_cabecalho_procisa(pdf, data_atual, num_pagina_atual)
+            pdf.set_font("Arial", 'B', 10)
             
         marca = str(reg_ativo.get('marca', '')).strip()
         modelo = str(reg_ativo.get('modelo', '')).strip()
         serie = str(reg_ativo.get('numero_serie', '')).strip()
-        marca_modelo_texto = f"{marca} {modelo}".strip()
-        pat_id = str(reg_ativo.get('patrimonio', patrimonio)).strip() # Na cautela múltipla, enviamos o ID FER via patrimônio
+        if marca.lower() in {'none', 'nan'}: marca = ""
+        if modelo.lower() in {'none', 'nan'}: modelo = ""
+        if serie.lower() in {'none', 'nan'}: serie = ""
         
-        condicao = str(reg_ativo.get('condicoes_para_uso', 'USADO - BOM')).strip()
+        marca_modelo_texto = f"{marca} {modelo}".strip()
+        pat_id = str(reg_ativo.get('patrimonio', patrimonio)).strip()
+        
+        condicao = str(reg_ativo.get('condicoes_para_uso', 'USADO - BOM')).strip() or "USADO - BOM"
         acessorios = str(reg_ativo.get('acessorios', '')).strip()
         situacao_completa = f"{condicao} - {acessorios}".strip(" -") if acessorios else condicao
         
         cod_d365 = str(reg_ativo.get('codigo_d365', '')).strip()
         desc_d365 = str(reg_ativo.get('descricao_d365', '')).strip()
         
-        # Puxa informações gerais do último item processado para o rodapé
-        coordenador = str(reg_ativo.get('coordenacao', unidade)).strip()
+        coordenador = str(reg_ativo.get('coordenacao', unidade)).strip() or unidade
         nf_procisa = str(reg_ativo.get('nf_procisa', '')).strip()
 
+        pdf.set_font("Arial", 'B', 10)
         pdf.cell(0, 6, txt=limpar_texto_pdf(f"{idx+1}. MARCA/MODELO: {marca_modelo_texto}"), ln=True)
         pdf.cell(0, 6, txt=limpar_texto_pdf(f"   NÚMERO DE SÉRIE: {serie}      NÚMERO DE ATIVO: {pat_id}"), ln=True)
         pdf.multi_cell(0, 6, txt=limpar_texto_pdf(f"   SITUAÇÃO / ACESSÓRIOS: {situacao_completa}"))
         if cod_d365:
             pdf.cell(0, 6, txt=limpar_texto_pdf(f"   CÓD D365: {cod_d365} - {desc_d365}"), ln=True)
-        pdf.ln(3)
-
-    # Linhas vazias para completar as 5
-    for i in range(len(info_ativo) + 1, 6):
-        pdf.cell(0, 5, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
-        pdf.cell(0, 5, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: ___________________  NÚMERO DE ATIVO: ___________________"), ln=True)
-        pdf.cell(0, 5, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
         pdf.ln(2)
-        
-    pdf.ln(3)
+
+    # Se tiver menos de 5 itens, completa até 5 linhas em branco para manter o padrão clássico do formulário
+    if total_itens < 5:
+        for i in range(total_itens + 1, 6):
+            if pdf.get_y() > 235:
+                break
+            pdf.cell(0, 5, txt=limpar_texto_pdf(f"{i}. MARCA/MODELO: _________________________________________"), ln=True)
+            pdf.cell(0, 5, txt=limpar_texto_pdf("   NÚMERO DE SÉRIE: ___________________  NÚMERO DE ATIVO: ___________________"), ln=True)
+            pdf.cell(0, 5, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
+            pdf.ln(2)
+
+    # Garante espaço para o rodapé de assinaturas
+    if pdf.get_y() > 230:
+        num_pagina_atual += 1
+        pdf.add_page()
+        _desenhar_cabecalho_procisa(pdf, data_atual, num_pagina_atual)
+
+    pdf.ln(2)
+    pdf.set_font("Arial", 'B', 10)
     pdf.cell(0, 6, txt=limpar_texto_pdf("MOTIVO DA DEVOLUÇÃO:"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf("[  ] MANUTENÇÃO   [  ] DESLIGAMENTO   [  ] CALIBRAÇÃO"), ln=True)
     
-    pdf.ln(3)
-    pdf.cell(0, 6, txt=limpar_texto_pdf(f"OBSERVAÇÕES: ____________________________________________________________________"), ln=True)
+    pdf.ln(2)
+    pdf.cell(0, 6, txt=limpar_texto_pdf("OBSERVAÇÕES: ____________________________________________________________________"), ln=True)
     pdf.cell(0, 6, txt=limpar_texto_pdf(f"COORD. RESPONSÁVEL: {coordenador if coordenador else '______________________'}      NÚMERO DA NF: {nf_procisa if nf_procisa else '______________________'}"), ln=True)
     
-    pdf.ln(12)
+    pdf.ln(10)
     pdf.cell(90, 10, txt="___________________________________", align='C')
     pdf.cell(90, 10, txt="___________________________________", ln=True, align='C')
     pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
