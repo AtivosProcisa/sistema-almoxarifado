@@ -30,6 +30,71 @@ COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_diverge
 COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
 COLUNAS_EMPREGADOS = ['matricula', 'nome', 'cpf', 'rg', 'projeto', 'unidade']
 
+# --- COLUNAS DO CONTROLE DE FERRAMENTAS USADAS ---
+COLUNAS_FERRAMENTAS = [
+    'id_controle', 'codigo_d365', 'descricao_d365', 'descricao_ferramenta',
+    'categoria', 'marca', 'modelo', 'numero_serie', 'patrimonio',
+    'quantidade', 'unidade', 'condicao_fisica', 'status_operacional',
+    'localizacao', 'responsavel_atual', 'matricula', 'projeto', 'coordenacao',
+    'data_entrada', 'data_entrega', 'data_devolucao', 'ultima_movimentacao',
+    'dias_sem_movimentacao', 'data_ultima_inspecao', 'proxima_inspecao',
+    'valor_referencia', 'custo_acumulado_manutencao', 'quantidade_manutencoes',
+    'motivo_segregacao', 'destinacao_final', 'documento_referencia', 'observacoes'
+]
+
+COLUNAS_MOV_FER = [
+    'id_movimento', 'data', 'id_fer', 'codigo_d365', 'tipo_movimento',
+    'localizacao_origem', 'localizacao_destino', 'responsavel_origem',
+    'responsavel_destino', 'projeto', 'quantidade', 'documento',
+    'usuario_registro', 'observacao'
+]
+
+COLUNAS_CAUTELA_FER = [
+    'id_cautela', 'id_fer', 'codigo_d365', 'colaborador', 'matricula',
+    'projeto', 'coordenacao', 'data_entrega', 'condicao_entrega',
+    'data_prevista_devolucao', 'data_efetiva_devolucao', 'condicao_devolucao',
+    'status', 'observacao'
+]
+
+COLUNAS_MANUT_FER = [
+    'id_manut', 'id_fer', 'data_envio', 'defeito_informado',
+    'fornecedor_oficina', 'numero_os', 'valor_manutencao', 'data_retorno',
+    'resultado', 'condicao_apos_manutencao', 'liberado_utilizacao', 'observacoes'
+]
+
+COLUNAS_BAIXA_FER = [
+    'id_baixa', 'id_fer', 'codigo_d365', 'condicao', 'motivo',
+    'data_segregacao', 'laudo_tecnico', 'valor_referencia', 'custo_recuperacao',
+    'viabilidade_recuperacao', 'aprovacao_baixa', 'data_baixa', 'destinacao',
+    'evidencia_documento', 'observacoes'
+]
+
+COLUNAS_CONCILIACAO_D365 = [
+    'codigo_d365', 'descricao_d365', 'saldo_d365', 'saldo_operacional_usados',
+    'diferenca', 'motivo_diferenca', 'situacao', 'acao_necessaria', 'atualizado_em'
+]
+
+LISTA_CONDICAO_FISICA = [
+    "NOVO", "USADO - BOM", "USADO - REGULAR", "EM INSPEÇÃO",
+    "EM MANUTENÇÃO", "COM DEFEITO", "SEGREGADO", "OBSOLETO", "DESCARTE"
+]
+
+LISTA_STATUS_OPERACIONAL = [
+    "DISPONÍVEL", "EM CAUTELA", "EM INSPEÇÃO", "EM MANUTENÇÃO",
+    "BLOQUEADO", "AGUARDANDO DECISÃO", "AGUARDANDO DESCARTE", "TRANSFERIDO", "BAIXADO"
+]
+
+LISTA_LOCALIZACOES_FER = [
+    "USADO-DISP", "USADO-INSPECAO", "USADO-MANUT", "USADO-DEFEITO",
+    "USADO-SEGREGADO", "USADO-OBSOLETO", "USADO-DESCARTE", "CAMPO / COLABORADOR", "BAIXADO / DESCARTADO"
+]
+
+LISTA_TIPOS_MOV_FER = [
+    "ENTRADA", "DEVOLUÇÃO", "ENTREGA", "CAUTELA", "TRANSFERÊNCIA",
+    "ENVIO PARA MANUTENÇÃO", "RETORNO DE MANUTENÇÃO", "LIBERAÇÃO",
+    "SEGREGAÇÃO", "BAIXA", "DESCARTE"
+]
+
 VALUES_INVALIDOS = {'', 'none', 'nan', 'null', 'nat', 'undefined', '<na>'}
 ID_PREF_COLUNAS = "PREF-COLS-DASHBOARD"
 
@@ -112,11 +177,11 @@ def registrar_log_auditoria(acao, alvo, detalhes):
 # PERSISTÊNCIA DE COLUNAS NA NUVEM (SUPABASE)
 # ==========================================
 def carregar_preferencias_colunas():
-    """Lê do Supabase a última configuração de colunas salva pelo utilizador."""
     padrao = {
         'inv': list(COLUNAS_ATIVOS),
         'mov': list(COLUNAS_MOV),
-        'trm': list(COLUNAS_TERMOS)
+        'trm': list(COLUNAS_TERMOS),
+        'fer': list(COLUNAS_FERRAMENTAS)
     }
     try:
         res = supabase.table('divergencias').select("observacoes").eq('id_divergencia', ID_PREF_COLUNAS).execute()
@@ -125,22 +190,26 @@ def carregar_preferencias_colunas():
             inv = [c for c in dados.get('inv', COLUNAS_ATIVOS) if c in COLUNAS_ATIVOS]
             mov = [c for c in dados.get('mov', COLUNAS_MOV) if c in COLUNAS_MOV]
             trm = [c for c in dados.get('trm', COLUNAS_TERMOS) if c in COLUNAS_TERMOS]
+            fer = [c for c in dados.get('fer', COLUNAS_FERRAMENTAS) if c in COLUNAS_FERRAMENTAS]
             return {
                 'inv': inv if inv else list(COLUNAS_ATIVOS),
                 'mov': mov if mov else list(COLUNAS_MOV),
-                'trm': trm if trm else list(COLUNAS_TERMOS)
+                'trm': trm if trm else list(COLUNAS_TERMOS),
+                'fer': fer if fer else list(COLUNAS_FERRAMENTAS)
             }
     except Exception:
         pass
     return padrao
 
-def salvar_preferencias_colunas(cols_inv, cols_mov, cols_trm):
-    """Salva imediatamente no Supabase a configuração atual de colunas."""
+def salvar_preferencias_colunas(cols_inv, cols_mov, cols_trm, cols_fer=None):
     try:
+        if cols_fer is None:
+            cols_fer = st.session_state.get('saved_cols_fer', COLUNAS_FERRAMENTAS)
         payload = json.dumps({
             'inv': list(cols_inv) if cols_inv else list(COLUNAS_ATIVOS),
             'mov': list(cols_mov) if cols_mov else list(COLUNAS_MOV),
-            'trm': list(cols_trm) if cols_trm else list(COLUNAS_TERMOS)
+            'trm': list(cols_trm) if cols_trm else list(COLUNAS_TERMOS),
+            'fer': list(cols_fer) if cols_fer else list(COLUNAS_FERRAMENTAS)
         }, ensure_ascii=False)
         registro = {
             'id_divergencia': ID_PREF_COLUNAS,
@@ -254,6 +323,69 @@ def carregar_dados():
             pd.DataFrame(columns=COLUNAS_USUARIOS), pd.DataFrame(columns=COLUNAS_DIVERG),
             pd.DataFrame(columns=COLUNAS_EMPREGADOS)
         )
+
+def _ler_tabela_segura(nome_tabela, colunas_padrao):
+    try:
+        res = supabase.table(nome_tabela).select("*").execute()
+        df = pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=colunas_padrao)
+    except Exception:
+        df = pd.DataFrame(columns=colunas_padrao)
+    for c in colunas_padrao:
+        if c not in df.columns:
+            df[c] = ""
+    if not df.empty:
+        df = df.fillna("").replace({"None": "", "none": "", "nan": "", "NaN": "", "null": ""})
+    return df[colunas_padrao] if not df.empty else pd.DataFrame(columns=colunas_padrao)
+
+def calcular_dias_sem_mov(data_str):
+    if not data_str or str(data_str).strip() == "":
+        return "0"
+    try:
+        dt = datetime.strptime(str(data_str).strip()[:10], "%Y-%m-%d")
+        dias = max(0, (datetime.now() - dt).days)
+        return str(dias)
+    except Exception:
+        return "0"
+
+@st.cache_data(ttl=5)
+def carregar_dados_ferramental():
+    df_fer = _ler_tabela_segura('ferramentas_usadas', COLUNAS_FERRAMENTAS)
+    df_mov_fer = _ler_tabela_segura('mov_ferramentas', COLUNAS_MOV_FER)
+    df_caut_fer = _ler_tabela_segura('cautelas_ferramentas', COLUNAS_CAUTELA_FER)
+    df_manut_fer = _ler_tabela_segura('manutencao_ferramentas', COLUNAS_MANUT_FER)
+    df_baixa_fer = _ler_tabela_segura('baixa_ferramentas', COLUNAS_BAIXA_FER)
+    df_conc_d365 = _ler_tabela_segura('conciliacao_d365_fer', COLUNAS_CONCILIACAO_D365)
+
+    if not df_fer.empty:
+        df_fer['id_controle'] = df_fer['id_controle'].astype(str).str.strip()
+        df_fer = df_fer[df_fer['id_controle'].apply(matricula_valida)].copy()
+        df_fer['dias_sem_movimentacao'] = df_fer['ultima_movimentacao'].apply(calcular_dias_sem_mov)
+
+    return df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365
+
+def gerar_proximo_id_fer(df_fer):
+    """Gera automaticamente o identificador sequencial FER-000001, FER-000002..."""
+    if df_fer.empty or 'id_controle' not in df_fer.columns:
+        return "FER-000001"
+    maior = 0
+    for val in df_fer['id_controle'].astype(str):
+        val_limpo = val.strip().upper()
+        if val_limpo.startswith("FER-"):
+            num_str = val_limpo.replace("FER-", "").strip()
+            if num_str.isdigit():
+                maior = max(maior, int(num_str))
+    return f"FER-{maior + 1:06d}"
+
+def buscar_ferramenta(termo_busca, df_fer):
+    """Busca universal de ferramenta por ID FER, Código D365, Patrimônio ou Nº de Série."""
+    if df_fer.empty or not termo_busca:
+        return pd.DataFrame()
+    t = str(termo_busca).strip().upper()
+    id_c = df_fer['id_controle'].fillna("").astype(str).str.strip().str.upper()
+    c_d365 = df_fer['codigo_d365'].fillna("").astype(str).str.strip().str.upper()
+    pat = df_fer['patrimonio'].fillna("").astype(str).str.strip().str.upper()
+    ser = df_fer['numero_serie'].fillna("").astype(str).str.strip().str.upper()
+    return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t)]
 
 def salvar_dados_massa(tabela, df_massa, colunas):
     try:
