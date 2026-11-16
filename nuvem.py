@@ -173,9 +173,6 @@ def registrar_log_auditoria(acao, alvo, detalhes):
     except Exception:
         pass
 
-# ==========================================
-# PERSISTÊNCIA DE COLUNAS NA NUVEM (SUPABASE)
-# ==========================================
 def carregar_preferencias_colunas():
     padrao = {
         'inv': list(COLUNAS_ATIVOS),
@@ -364,7 +361,6 @@ def carregar_dados_ferramental():
     return df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365
 
 def gerar_proximo_id_fer(df_fer):
-    """Gera automaticamente o identificador sequencial FER-000001, FER-000002..."""
     if df_fer.empty or 'id_controle' not in df_fer.columns:
         return "FER-000001"
     maior = 0
@@ -377,7 +373,6 @@ def gerar_proximo_id_fer(df_fer):
     return f"FER-{maior + 1:06d}"
 
 def buscar_ferramenta(termo_busca, df_fer):
-    """Busca universal de ferramenta por ID FER, Código D365, Patrimônio ou Nº de Série."""
     if df_fer.empty or not termo_busca:
         return pd.DataFrame()
     t = str(termo_busca).strip().upper()
