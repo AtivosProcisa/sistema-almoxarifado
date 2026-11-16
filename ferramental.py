@@ -76,9 +76,13 @@ def buscar_ferramenta(termo_busca, df_fer):
 # ==========================================
 # ESTILIZAÇÃO VISUAL DE ALERTAS
 # ==========================================
-def formatar_badge_alerta(status_op, cond_fis):
+def formatar_badge_alerta(status_op, cond_fis, dias_ociosos=0):
     st_up = str(status_op).strip().upper()
     cd_up = str(cond_fis).strip().upper()
+    
+    if int(dias_ociosos) > 90 and st_up not in ["BAIXADO", "TRANSFERIDO"]:
+        return "⏳ PARADO > 90 DIAS"
+        
     if st_up == "DISPONÍVEL":
         return "🟢 DISPONÍVEL"
     elif st_up == "EM CAUTELA":
@@ -135,37 +139,44 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     st.markdown("##### 📊 SALDO OPERACIONAL DE FERRAMENTAS USADAS")
     
     if not df_fer.empty:
-        qtd_series = df_fer['quantidade'].apply(lambda x: _parse_int(x, 1))
         st_op = df_fer['status_operacional'].astype(str).str.upper().str.strip()
         cd_fi = df_fer['condicao_fisica'].astype(str).str.upper().str.strip()
+        dias_ociosos = df_fer['dias_sem_movimentacao'].apply(lambda x: _parse_int(x, 0))
 
         mask_ativo_fisico = ~st_op.isin(['BAIXADO', 'TRANSFERIDO'])
-        total_fisico = int(qtd_series[mask_ativo_fisico].sum())
+        
+        # Contagem baseada na Quantidade de Itens (Linhas exclusivas) em vez da Soma
+        total_fisico = int(mask_ativo_fisico.sum())
         
         mask_disp = (st_op == 'DISPONÍVEL') & (cd_fi.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))
-        s_disp = int(qtd_series[mask_disp].sum())
-        s_cautela = int(qtd_series[st_op == 'EM CAUTELA'].sum())
-        s_manut = int(qtd_series[(st_op == 'EM MANUTENÇÃO') | (cd_fi == 'EM MANUTENÇÃO')].sum())
-        s_insp = int(qtd_series[(st_op == 'EM INSPEÇÃO') | (cd_fi == 'EM INSPEÇÃO')].sum())
-        s_defeito = int(qtd_series[(cd_fi == 'COM DEFEITO') | (st_op == 'BLOQUEADO')].sum())
-        s_segreg = int(qtd_series[cd_fi == 'SEGREGADO'].sum())
-        s_obsoleto = int(qtd_series[cd_fi == 'OBSOLETO'].sum())
-        s_descarte = int(qtd_series[(st_op == 'AGUARDANDO DESCARTE') | (cd_fi == 'DESCARTE')].sum())
+        
+        s_disp = int(mask_disp.sum())
+        s_cautela = int((st_op == 'EM CAUTELA').sum())
+        s_manut = int(((st_op == 'EM MANUTENÇÃO') | (cd_fi == 'EM MANUTENÇÃO')).sum())
+        s_insp = int(((st_op == 'EM INSPEÇÃO') | (cd_fi == 'EM INSPEÇÃO')).sum())
+        s_defeito = int(((cd_fi == 'COM DEFEITO') | (st_op == 'BLOQUEADO')).sum())
+        s_segreg = int((cd_fi == 'SEGREGADO').sum())
+        s_obsoleto = int((cd_fi == 'OBSOLETO').sum())
+        s_descarte = int(((st_op == 'AGUARDANDO DESCARTE') | (cd_fi == 'DESCARTE')).sum())
+        
+        # Ociosidade: ferramentas que estão ativas mas paradas há > 90 dias
+        s_ocioso = int(((dias_ociosos > 90) & mask_ativo_fisico).sum())
     else:
-        total_fisico = s_disp = s_cautela = s_manut = s_insp = s_defeito = s_segreg = s_obsoleto = s_descarte = 0
+        total_fisico = s_disp = s_cautela = s_manut = s_insp = s_defeito = s_segreg = s_obsoleto = s_descarte = s_ocioso = 0
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("📦 TOTAL FÍSICO", total_fisico)
-    c2.metric("🟢 DISPONÍVEL (Aprovadas)", s_disp, help="Apenas ferramentas aprovadas e prontas para nova entrega")
+    c1.metric("📦 TOTAL FÍSICO", total_fisico, help="Total de itens/ferramentas cadastrados na base.")
+    c2.metric("🟢 DISPONÍVEL (Aprovadas)", s_disp, help="Apenas ferramentas aprovadas e prontas para entrega.")
     c3.metric("🔵 EM CAUTELA", s_cautela)
     c4.metric("🟡 EM INSPEÇÃO", s_insp)
     c5.metric("🟠 EM MANUTENÇÃO", s_manut)
 
-    c6, c7, c8, c9 = st.columns(4)
+    c6, c7, c8, c9, c10 = st.columns(5)
     c6.metric("🔴 COM DEFEITO / BLOQ.", s_defeito)
     c7.metric("🟣 SEGREGADO", s_segreg)
     c8.metric("⚪ OBSOLETO", s_obsoleto)
     c9.metric("🗑️ AGUARDANDO DESCARTE", s_descarte)
+    c10.metric("⏳ PARADOS > 3 MESES", s_ocioso, help="Ferramentas sem movimentação há mais de 90 dias.")
 
     st.markdown(
         "<div style='background-color:#f8f9fa; padding:6px 12px; border-radius:6px; font-size:0.80rem; margin-bottom:12px; border:1px solid #e9ecef;'>"
@@ -175,7 +186,8 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         "🟡 <b>Amarelo:</b> Em Inspeção &nbsp;|&nbsp; "
         "🟠 <b>Laranja:</b> Em Manutenção &nbsp;|&nbsp; "
         "🔴 <b>Vermelho:</b> Defeito / Bloqueado &nbsp;|&nbsp; "
-        "⚪ <b>Cinza:</b> Obsoleto / Descarte"
+        "⚪ <b>Cinza:</b> Obsoleto / Descarte &nbsp;|&nbsp; "
+        "⏳ <b>Ampulheta:</b> Parado > 90 dias"
         "</div>",
         unsafe_allow_html=True
     )
@@ -202,6 +214,8 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 fil_loc = st.selectbox("Localização:", ["Todas"] + LISTA_LOCALIZACOES_FER)
             with f4:
                 fil_txt = st.text_input("Buscar (ID FER, Cód D365, Descrição, Responsável):")
+                
+            f_ocioso = st.checkbox("⏳ Mostrar apenas itens parados há mais de 3 meses (> 90 dias)", value=False)
 
             st.multiselect(
                 "Ocultar ou Mostrar Colunas (Salvo automaticamente na nuvem):",
@@ -221,13 +235,15 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 df_view = df_view[df_view['condicao_fisica'] == fil_cd]
             if fil_loc != "Todas":
                 df_view = df_view[df_view['localizacao'] == fil_loc]
+            if f_ocioso:
+                df_view = df_view[df_view['dias_sem_movimentacao'].apply(lambda x: _parse_int(x, 0)) > 90]
             if fil_txt.strip():
                 termo = fil_txt.strip().lower()
                 mask = df_view.astype(str).apply(lambda x: x.str.lower().str.contains(termo, na=False)).any(axis=1)
                 df_view = df_view[mask]
 
             df_view_display = df_view[cols_exibir].copy()
-            df_view_display.insert(0, "Alerta", df_view.apply(lambda r: formatar_badge_alerta(r['status_operacional'], r['condicao_fisica']), axis=1))
+            df_view_display.insert(0, "Alerta", df_view.apply(lambda r: formatar_badge_alerta(r.get('status_operacional',''), r.get('condicao_fisica',''), r.get('dias_sem_movimentacao', 0)), axis=1))
             st.dataframe(df_view_display, use_container_width=True, hide_index=True)
         else:
             st.info("Nenhuma ferramenta usada cadastrada ainda. Utilize a aba '➕ Cadastrar / Receber Ferramenta' ao lado.")
@@ -235,7 +251,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     with tabs[1]:
         st.subheader("➕ Recebimento / Cadastro de Ferramenta Usada")
         prox_id = gerar_proximo_id_fer(df_fer)
-        st.info(f"💡 **Identificação Individual Automática:** O próximo código físico disponível é **`{prox_id}`**. Um mesmo Código D365 pode possuir diversos IDs FER individuais.")
+        st.info(f"💡 **Identificação Individual Automática:** O próximo código físico disponível é **`{prox_id}`**. A data de entrada é registada automaticamente e contabilizada no histórico (Saldo Inicial).")
 
         with st.form("form_cad_ferramenta"):
             c_a, c_b, c_c, c_d = st.columns(4)
@@ -325,7 +341,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                             'quantidade': str(quantidade),
                             'documento': doc_ref.strip(),
                             'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                            'observacao': f"Cadastro inicial ({cond_fisica} / {status_op})"
+                            'observacao': f"Cadastro Inicial (Saldo): {cond_fisica} / {status_op}"
                         })
 
                     try:
@@ -368,7 +384,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 
         st.divider()
         st.subheader("📥 Importar Planilha de Ferramentas Usadas (.xlsx)")
-        st.info("💡 A ferramenta reconhece automaticamente o padrão **MASSIVO FERRAMENTAL** (Número do item, Nome do produto, Pesquisar nome, Total, etc) ou o padrão da própria ferramenta (exportado acima). O que faltar pode ser deixado em branco para edição manual depois.")
+        st.info("💡 A ferramenta reconhece automaticamente o padrão **MASSIVO FERRAMENTAL** ou o padrão exportado. A Data de Entrada e Histórico Base são criados automaticamente para as ferramentas importadas.")
         
         arq_fer = st.file_uploader("Arraste a planilha Excel com a relação de ferramentas (.xlsx)", type=["xlsx"], key="up_fer_mass")
         if arq_fer:
@@ -376,7 +392,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 df_up_f = pd.read_excel(arq_fer)
                 df_up_f.columns = [normalizar_nome_coluna(c) for c in df_up_f.columns]
                 
-                # MAPEAMENTO DO PADRÃO "MASSIVO FERRAMENTAL"
+                # MAPEAMENTO DO PADRÃO MASSIVO FERRAMENTAL
                 de_para_massivo = {
                     'numero_do_item': 'codigo_d365',
                     'nome_do_produto': 'descricao_d365',
@@ -387,13 +403,11 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 }
                 df_up_f = df_up_f.rename(columns=de_para_massivo)
                 
-                # Endereçamentos físicos da planilha massiva vão para observações para controle logístico
                 if 'enderecamento_01' in df_up_f.columns or 'enderecamento_02' in df_up_f.columns:
                     e1 = df_up_f.get('enderecamento_01', pd.Series(['']*len(df_up_f))).fillna('').astype(str)
                     e2 = df_up_f.get('enderecamento_02', pd.Series(['']*len(df_up_f))).fillna('').astype(str)
                     df_up_f['observacoes'] = "Endereço: " + e1 + " / " + e2
                 
-                # Preenche valores que vieram em branco com o padrão operacional
                 if 'condicao_fisica' not in df_up_f.columns:
                     df_up_f['condicao_fisica'] = 'USADO - BOM'
                 else:
@@ -408,12 +422,10 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 if 'quantidade' not in df_up_f.columns:
                     df_up_f['quantidade'] = '1'
                 
-                # Limpa N/A ou Vazio de Marca, Modelo, Serie para evitar bugs na exibição
                 for c_limpar in ['marca', 'modelo', 'numero_serie', 'categoria', 'projeto', 'coordenacao']:
                     if c_limpar in df_up_f.columns:
                         df_up_f[c_limpar] = df_up_f[c_limpar].fillna('')
                 
-                # Gera o ID Controle (FER-000000) sequencial para as linhas importadas
                 base_n = 0
                 if not df_fer.empty and 'id_controle' in df_fer.columns:
                     for val in df_fer['id_controle'].astype(str):
@@ -426,23 +438,45 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 if 'id_controle' not in df_up_f.columns:
                     df_up_f['id_controle'] = [f"FER-{base_n + idx + 1:06d}" for idx in range(len(df_up_f))]
                 else:
-                    # Se tiver a coluna mas ela estiver vazia em algum ponto
                     faltantes_mask = df_up_f['id_controle'].isnull() | (df_up_f['id_controle'] == '')
                     novos_ids = [f"FER-{base_n + idx + 1:06d}" for idx in range(faltantes_mask.sum())]
                     df_up_f.loc[faltantes_mask, 'id_controle'] = novos_ids
                 
-                # Parametrização inicial de cadastro
+                # Parametrização inicial obrigatória
                 df_up_f['responsavel_atual'] = 'ALMOXARIFADO'
                 df_up_f['data_entrada'] = datetime.now().strftime('%Y-%m-%d')
                 df_up_f['ultima_movimentacao'] = datetime.now().strftime('%Y-%m-%d')
                 df_up_f['dias_sem_movimentacao'] = '0'
 
-                st.caption(f"Leitura concluída. Identificação do Padrão Massivo efetuada. Pré-visualização ({len(df_up_f)} itens):")
-                st.dataframe(df_up_f[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'quantidade', 'condicao_fisica']].head(5), use_container_width=True)
+                st.caption(f"Leitura concluída. Pré-visualização ({len(df_up_f)} itens):")
+                st.dataframe(df_up_f[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'quantidade', 'condicao_fisica', 'data_entrada']].head(5), use_container_width=True)
                 
                 if st.button("🚀 Confirmar Importação de Ferramentas", type="primary"):
                     with st.spinner("Enviando ferramentas para o Supabase..."):
                         if salvar_dados_massa('ferramentas_usadas', df_up_f, COLUNAS_FERRAMENTAS):
+                            
+                            # Gera histórico em lote para garantir rastreabilidade
+                            movs_massa = []
+                            stamp_t = datetime.now().strftime('%Y%m%d%H%M%S')
+                            hoje_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            for indx, m_r in df_up_f.iterrows():
+                                movs_massa.append({
+                                    'id_movimento': f"MVF-{stamp_t}-{indx}",
+                                    'data': hoje_dt,
+                                    'id_fer': m_r['id_controle'],
+                                    'codigo_d365': m_r.get('codigo_d365', ''),
+                                    'tipo_movimento': 'ENTRADA',
+                                    'localizacao_origem': 'EXTERNO',
+                                    'localizacao_destino': m_r.get('localizacao', 'USADO-DISP'),
+                                    'responsavel_origem': 'IMPORTAÇÃO EM MASSA',
+                                    'responsavel_destino': 'ALMOXARIFADO',
+                                    'projeto': m_r.get('projeto', ''),
+                                    'quantidade': str(m_r.get('quantidade', '1')),
+                                    'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
+                                    'observacao': "Carga Inicial (Saldo)"
+                                })
+                            supabase.table('mov_ferramentas').insert(movs_massa).execute()
+                            
                             registrar_log_auditoria("UPLOAD FERRAMENTAL", arq_fer.name, f"{len(df_up_f)} ferramentas importadas (Padrão Massivo).")
                             st.success("✅ Ferramentas importadas com sucesso!")
                             st.rerun()
@@ -519,7 +553,7 @@ def render_inspecao_movimentacao_fer(df_fer):
             )
 
             decisao = st.radio(
-                "Selecione a Decisão da Inspeção (Regra de Fluxo Item 6):",
+                "Selecione a Decisão da Inspeção:",
                 [
                     "🟢 1. APROVAR (USADO - BOM/REGULAR → DISPONÍVEL em USADO-DISP)",
                     "🟠 2. ENVIAR PARA MANUTENÇÃO (EM MANUTENÇÃO → Bloqueada para entrega em USADO-MANUT)",
@@ -1110,7 +1144,7 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
         for _, r in df_validos.iterrows():
             cod = str(r.get('codigo_d365', '')).strip()
             if cod:
-                q = _parse_int(r.get('quantidade', '1'), 1)
+                q = 1 # Conta 1 unidade por registro/linha ao invés de somar a string "quantidade"
                 saldos_op_map[cod] = saldos_op_map.get(cod, 0) + q
                 if cod not in desc_map:
                     desc_map[cod] = r.get('descricao_d365') or r.get('descricao_ferramenta', '')
