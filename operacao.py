@@ -733,7 +733,8 @@ def render_modulo_laboratorio(df_ativos):
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE AUTOMÁTICO + FOLHA A4
+# ==========================================
+# MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE AUTOMÁTICO + FOLHA A4 PADRÃO PROCISA
 # ==========================================
 def render_operador_qrcode_eqp(df_ativos, df_empregados):
     gerar_etiquetas_qrcode_pdf = getattr(pdf_termo, 'gerar_etiquetas_qrcode_pdf', None)
@@ -745,7 +746,7 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
     if st.session_state.get('pdf_etiquetas_eqp_pronto'):
         st.success(st.session_state.pdf_etiquetas_eqp_pronto['msg'])
         st.download_button(
-            "📥 Baixar Folha de Etiquetas QR Code em PDF (A4 - Equipamentos)",
+            "📥 Baixar Folha de Etiquetas Padrão PROCISA em PDF (A4 - Equipamentos)",
             data=st.session_state.pdf_etiquetas_eqp_pronto['bytes'],
             file_name=st.session_state.pdf_etiquetas_eqp_pronto['nome'],
             mime="application/pdf",
@@ -758,20 +759,26 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
 
     aba_sc_eqp, aba_etq_eqp = st.tabs([
         "📡 Coletor / Scanner Automático (Equipamentos)",
-        "🏷️ Gerador de Folha de Etiquetas QR Code em Lote (PDF A4)"
+        "🏷️ Gerador de Folha de Etiquetas Padrão PROCISA (PDF A4)"
     ])
 
     with aba_sc_eqp:
         if render_leitor_fn:
-            cod_eqp_qr = render_leitor_fn("eqp_qr", "Ex: US-AC1N1P9 ou Patrimônio...")
+            cod_eqp_bruto = render_leitor_fn("eqp_qr", "Ex: US-AC1N1P9 ou Patrimônio...")
         else:
-            cod_eqp_qr = st.text_input("🔫 Bipe ou Digite o Código:", placeholder="Ex: US-AC1N1P9 ou Patrimônio...").strip().upper()
+            cod_eqp_bruto = st.text_input("🔫 Bipe ou Digite o Código:", placeholder="Ex: US-AC1N1P9 ou Patrimônio...").strip().upper()
 
-        if cod_eqp_qr and not df_ativos.empty:
+        if cod_eqp_bruto and not df_ativos.empty:
+            cod_eqp_qr = cod_eqp_bruto
+            if "|" in cod_eqp_bruto and "FER:" in cod_eqp_bruto:
+                for p in cod_eqp_bruto.split("|"):
+                    if p.startswith("FER:"):
+                        cod_eqp_qr = p.replace("FER:", "").strip()
+
             resultados = buscar_ativo(cod_eqp_qr, df_ativos)
             if not resultados.empty:
-                st.success(f"✅ **{len(resultados)} equipamento(s)** localizado(s) para o código `{cod_eqp_qr}`!")
-                cols_v = [c for c in ['patrimonio', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela', 'enderecamento_01', 'enderecamento_02'] if c in resultados.columns]
+                st.success(f"✅ **{len(resultados)} equipamento(s)** localizado(s) para o código `{cod_eqp_bruto}`!")
+                cols_v = [c for c in ['patrimonio', 'item', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela', 'enderecamento_01', 'enderecamento_02'] if c in resultados.columns]
                 st.dataframe(resultados[cols_v], use_container_width=True, hide_index=True)
 
                 op_eq = resultados.apply(lambda r: f"{r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | End: {r.get('enderecamento_01','')} / {r.get('enderecamento_02','')}", axis=1).tolist()
@@ -782,8 +789,8 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
                 with st.form("form_qr_eqp_mov"):
                     ce1, ce2, ce3 = st.columns(3)
                     with ce1:
-                        n_end1 = st.text_input("Bipar Novo Endereçamento 01:", value=reg_eq.get('enderecamento_01', ''))
-                        n_end2 = st.text_input("Bipar Novo Endereçamento 02:", value=reg_eq.get('enderecamento_02', ''))
+                        n_end1 = st.text_input("Bipar Novo LOCAL (Endereçamento 01):", value=reg_eq.get('enderecamento_01', ''))
+                        n_end2 = st.text_input("Bipar Novo Descri. Local (Endereçamento 02):", value=reg_eq.get('enderecamento_02', ''))
                     with ce2:
                         n_caut = st.text_input("Cautela / Localização:", value=reg_eq.get('cautela', 'ALMOXARIFADO CENTRAL'))
                     with ce3:
@@ -802,30 +809,43 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
                         st.success(f"✅ Equipamento `{pat_sel}` atualizado com sucesso!")
                         st.rerun()
             else:
-                st.warning(f"⚠️ Nenhum equipamento ou endereço localizado para `{cod_eqp_qr}`.")
+                st.warning(f"⚠️ Nenhum equipamento ou endereço localizado para `{cod_eqp_bruto}`.")
 
     with aba_etq_eqp:
-        st.markdown("###### 🖨️ Impressão em Lote de Etiquetas QR Code (Equipamentos e Endereços)")
+        st.markdown("###### 🖨️ Impressão em Lote de Etiquetas Padronizadas PROCISA (Equipamentos - 8 por Folha A4)")
         if not df_ativos.empty and gerar_etiquetas_qrcode_pdf:
-            op_at = df_ativos.apply(lambda r: f"{r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')}", axis=1).tolist()
-            sel_at = st.multiselect("Selecione os Equipamentos para gerar etiquetas (21 por folha A4):", options=op_at, default=op_at[:21])
+            op_at = df_ativos.apply(lambda r: f"{r['patrimonio']} | Cód D365: {r.get('item','')} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | End: {r.get('enderecamento_01','')}", axis=1).tolist()
+            sel_at = st.multiselect("Selecione os Equipamentos para gerar etiquetas (8 por folha A4):", options=op_at, default=op_at[:8])
             etq_eqp_list = []
             for item_a in sel_at:
                 pat_a = item_a.split(" | ")[0]
                 r_a = df_ativos[df_ativos['patrimonio'] == pat_a].iloc[0]
+                cod_item_d365 = str(r_a.get('item', '')).strip()
+                e1_a = str(r_a.get('enderecamento_01', '')).strip()
+                e2_a = str(r_a.get('enderecamento_02', '')).strip()
+                qr_eqp = f"D365:{cod_item_d365}|FER:{pat_a}|LOC:{e1_a}/{e2_a}"
+
                 etq_eqp_list.append({
-                    'codigo': pat_a,
-                    'tipo': f"SÉRIE: {r_a.get('numero_serie', '')}",
-                    'subtitulo': f"{r_a.get('equipamento', '')} {r_a.get('marca', '')} {r_a.get('modelo', '')}".strip()
+                    'codigo_qr': qr_eqp,
+                    'item_d365': cod_item_d365,
+                    'ref_interna': pat_a,
+                    'descricao': f"{r_a.get('equipamento', '')} {r_a.get('marca', '')} {r_a.get('modelo', '')}".strip(),
+                    'placa_licenca': '',
+                    'local': e1_a,
+                    'descri_local': e2_a,
+                    'quantidade': '1',
+                    'data_criacao': r_a.get('atualizado_em', datetime.now().strftime('%Y-%m-%d')),
+                    'obs': '0',
+                    'lote': str(r_a.get('numero_serie', '')).strip()
                 })
-            if etq_eqp_list and st.button(f"🖨️ Gerar PDF com {len(etq_eqp_list)} Etiqueta(s)", type="primary"):
-                with st.spinner("Gerando folha A4 de etiquetas QR Code..."):
+            if etq_eqp_list and st.button(f"🖨️ Gerar PDF com {len(etq_eqp_list)} Etiqueta(s) Padrão PROCISA", type="primary"):
+                with st.spinner("Gerando folha A4 de etiquetas padrão PROCISA..."):
                     cam_eq = gerar_etiquetas_qrcode_pdf(etq_eqp_list)
                     with open(cam_eq, "rb") as f_e:
                         st.session_state.pdf_etiquetas_eqp_pronto = {
                             'bytes': f_e.read(),
-                            'nome': f"Etiquetas_QR_Equipamentos_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                            'msg': f"✅ Folha com {len(etq_eqp_list)} etiquetas gerada!"
+                            'nome': f"Etiquetas_PROCISA_Equipamentos_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                            'msg': f"✅ Folha com {len(etq_eqp_list)} etiqueta(s) no padrão PROCISA gerada!"
                         }
                     st.rerun()
         else:
