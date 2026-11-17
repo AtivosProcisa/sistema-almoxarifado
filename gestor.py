@@ -2,24 +2,38 @@ import streamlit as st
 import pandas as pd
 import io
 from datetime import datetime
-from nuvem import (
-    supabase, COLUNAS_ATIVOS, COLUNAS_MOV, COLUNAS_TERMOS, COLUNAS_DIVERG, COLUNAS_EMPREGADOS,
-    normalizar_nome_coluna, salvar_dados_massa, registrar_log_auditoria,
-    calcular_uso_supabase, exibir_marca_desenvolvedor, matricula_valida,
-    limpar_texto_matricula, expurgar_linhas_nulas_nuvem,
-    carregar_preferencias_colunas, salvar_preferencias_colunas
-)
+import nuvem
 from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel
 
+supabase = nuvem.supabase
+COLUNAS_ATIVOS = nuvem.COLUNAS_ATIVOS
+COLUNAS_MOV = nuvem.COLUNAS_MOV
+COLUNAS_TERMOS = nuvem.COLUNAS_TERMOS
+COLUNAS_DIVERG = nuvem.COLUNAS_DIVERG
+COLUNAS_EMPREGADOS = nuvem.COLUNAS_EMPREGADOS
+normalizar_nome_coluna = nuvem.normalizar_nome_coluna
+salvar_dados_massa = nuvem.salvar_dados_massa
+registrar_log_auditoria = nuvem.registrar_log_auditoria
+calcular_uso_supabase = nuvem.calcular_uso_supabase
+exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
+matricula_valida = nuvem.matricula_valida
+limpar_texto_matricula = nuvem.limpar_texto_matricula
+expurgar_linhas_nulas_nuvem = nuvem.expurgar_linhas_nulas_nuvem
+carregar_preferencias_colunas = getattr(nuvem, 'carregar_preferencias_colunas', lambda: {})
+salvar_preferencias_colunas = getattr(nuvem, 'salvar_preferencias_colunas', lambda *a, **kw: None)
+calcular_dias_sem_mov = getattr(nuvem, 'calcular_dias_sem_mov', lambda x: "0")
+
 # ==========================================
-# FUNÇÕES DE GATILHO PARA SALVAR NA NUVEM
+# FUNÇÕES DE GATILHO E SEMÁFORO DE ATIVOS
 # ==========================================
 def inicializar_prefs_nuvem():
     if 'prefs_carregadas_nuvem' not in st.session_state:
         prefs = carregar_preferencias_colunas()
-        st.session_state.saved_cols_inv = prefs['inv']
-        st.session_state.saved_cols_mov = prefs['mov']
-        st.session_state.saved_cols_trm = prefs['trm']
+        st.session_state.saved_cols_inv = prefs.get('inv', list(COLUNAS_ATIVOS))
+        st.session_state.saved_cols_mov = prefs.get('mov', list(COLUNAS_MOV))
+        st.session_state.saved_cols_trm = prefs.get('trm', list(COLUNAS_TERMOS))
+        if 'saved_cols_fer' not in st.session_state:
+            st.session_state.saved_cols_fer = prefs.get('fer', [])
         st.session_state.prefs_carregadas_nuvem = True
 
 def update_cols_inv():
@@ -27,7 +41,8 @@ def update_cols_inv():
     salvar_preferencias_colunas(
         st.session_state.saved_cols_inv,
         st.session_state.saved_cols_mov,
-        st.session_state.saved_cols_trm
+        st.session_state.saved_cols_trm,
+        st.session_state.get('saved_cols_fer')
     )
 
 def update_cols_mov():
@@ -35,7 +50,8 @@ def update_cols_mov():
     salvar_preferencias_colunas(
         st.session_state.saved_cols_inv,
         st.session_state.saved_cols_mov,
-        st.session_state.saved_cols_trm
+        st.session_state.saved_cols_trm,
+        st.session_state.get('saved_cols_fer')
     )
 
 def update_cols_trm():
@@ -43,169 +59,183 @@ def update_cols_trm():
     salvar_preferencias_colunas(
         st.session_state.saved_cols_inv,
         st.session_state.saved_cols_mov,
-        st.session_state.saved_cols_trm
+        st.session_state.saved_cols_trm,
+        st.session_state.get('saved_cols_fer')
     )
 
+def formatar_badge_alerta_ativo(status_sis, cond_uso, dias_ociosos=0):
+    st_up = str(status_sis).strip().upper()
+    cd_up = str(cond_uso).strip().upper()
+    try:
+        d_oc = int(float(str(dias_ociosos).strip()))
+    except Exception:
+        d_oc = 0
+
+    if d_oc > 90 and st_up not in ["BAIXADO"]:
+        return "⏳ PARADO > 90 DIAS"
+    if "INAPTO" in cd_up or "REPROVADO" in cd_up or "INSERV" in cd_up:
+        return "🔴 DEFEITO / BLOQUEADO"
+    if st_up == "DISPONÍVEL":
+        return "🟢 DISPONÍVEL"
+    elif st_up == "EM USO":
+        return "🔵 EM USO / CAUTELA"
+    elif "MANUTEN" in st_up:
+        return "🟠 EM MANUTENÇÃO"
+    elif "TRÂNSITO" in st_up or "TRANSITO" in st_up:
+        return "🟡 EM TRÂNSITO"
+    elif st_up == "BAIXADO":
+        return "⚪ BAIXADO / DESCARTE"
+    return f"⚪ {st_up}"
+
 # ==========================================
-# MÓDULO 1: DASHBOARD E CONCILIAÇÃO
+# MÓDULO 1: DASHBOARD E CONCILIAÇÃO (PADRONIZADO COM F1)
 # ==========================================
 def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados):
-    # Garante que a última configuração salva na nuvem seja carregada mesmo após Logout ou F5
     inicializar_prefs_nuvem()
 
-    st.header("📊 Painel Gerencial e Conciliação")
-    
+    # Layout compacto no topo com rolagem focada na tabela
+    st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+    st.subheader("📦 Controle Gerencial de Equipamentos e Ativos")
+
     if st.session_state.get('resumo_ultima_operacao'):
         info_op = st.session_state.resumo_ultima_operacao
-        st.success(f"✅ **{info_op['titulo']}** | Sistema atualizado às {info_op['hora']}")
-        c_op1, c_op2, c_op3, c_op4 = st.columns(4)
-        c_op1.metric("Quantidade Anterior", info_op['qtd_antes'])
-        c_op2.metric("Novos Inseridos", f"+{info_op['novos']}")
-        c_op3.metric("Existentes Atualizados", info_op['atualizados'])
-        c_op4.metric("Total Atual na Base", info_op['qtd_depois'], delta=f"{info_op['qtd_depois'] - info_op['qtd_antes']} ativos")
-        if st.button("✖️ Fechar Resumo de Envio"):
+        st.success(f"✅ **{info_op['titulo']}** | Atualizado às {info_op['hora']} (Antes: {info_op['qtd_antes']} | Novos: +{info_op['novos']} | Atualizados: {info_op['atualizados']} | Total: {info_op['qtd_depois']})")
+        if st.button("✖️ Fechar Resumo"):
             st.session_state.resumo_ultima_operacao = None
             st.rerun()
-        st.divider()
-
-    total_ativos = len(df_ativos)
-    if not df_ativos.empty:
-        cautela_upper = df_ativos['cautela'].fillna("").astype(str).str.upper()
-        status_upper = df_ativos['status_sistema'].fillna("").astype(str).str.upper()
-        
-        mask_almox = cautela_upper.str.contains('ALMOX')
-        mask_disp = status_upper == 'DISPONÍVEL'
-        mask_uso = status_upper == 'EM USO'
-        mask_manut = status_upper.str.contains('MANUTEN') | cautela_upper.str.contains('LAB')
-        
-        disp_estoque = len(df_ativos[mask_disp & mask_almox])
-        em_uso = len(df_ativos[mask_uso])
-        em_manut = len(df_ativos[mask_manut])
-    else:
-        disp_estoque, em_uso, em_manut = 0, 0, 0
-        
-    diverg_pend = len(df_diverg[df_diverg['status_resolucao'] != 'Resolvido']) if not df_diverg.empty else 0
-    termos_fila = len(df_termos[df_termos['status_termo'] == 'Pendente Impressão']) if not df_termos.empty else 0
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Total de Ativos", total_ativos)
-    col2.metric("Disponíveis (Almox)", disp_estoque, help="Status 'Disponível' + Cautela 'Almoxarifado'")
-    col3.metric("Em Uso (Campo)", em_uso)
-    col4.metric("Laboratório / Manut.", em_manut)
-    col5.metric("Divergências / Fila Termos", f"{diverg_pend} / {termos_fila}")
 
     abas_dashboard = [
-        "Inventário Geral", 
-        "Histórico de Movimentações", 
-        "Termos Emitidos", 
-        "➕ Novo Cadastro Manual", 
-        "📥 Importar / Exportar Relatórios"
+        "📋 Estoque Segmentado por Status", 
+        "➕ Cadastrar / Receber Equipamento", 
+        "📜 Histórico de Movimentações", 
+        "📄 Termos Emitidos", 
+        "📥 Importar / Exportar & Backup"
     ]
     if st.session_state.perfil == 'Master':
         abas_dashboard.append("❌ Excluir Registos (Master)")
         
     abas = st.tabs(abas_dashboard)
     
-    # --- ABA 0: INVENTÁRIO GERAL ---
+    # --- ABA 0: ESTOQUE SEGMENTADO POR STATUS (ESPELHADO DO MODO FERRAMENTAL) ---
     with abas[0]:
-        with st.expander("👁️ Filtros e Colunas Visíveis", expanded=False):
-            cf1, cf2, cf3 = st.columns(3)
-            lista_status = ["Todos"] + (sorted(df_ativos['status_sistema'].fillna("").unique().tolist()) if not df_ativos.empty else [])
-            lista_coord = ["Todas"] + (sorted(df_ativos['coordenacao'].fillna("").unique().tolist()) if not df_ativos.empty else [])
-            
-            with cf1:
-                f_status = st.selectbox("Filtrar Status:", lista_status)
-            with cf2:
-                f_coord = st.selectbox("Filtrar Coordenação:", lista_coord)
-            with cf3:
-                f_busca = st.text_input("Buscar (Patrimônio, Série, Equipamento ou Cautela):")
-            
-            c_sh1, c_sh2 = st.columns([5, 1])
-            with c_sh2:
-                st.write("")
-                if st.button("🔄 Restaurar Padrão", key="btn_reset_inv", use_container_width=True):
+        cf1, cf2, cf3, cf4 = st.columns([2.2, 1.1, 1.1, 0.7])
+        with cf1:
+            f_busca = st.text_input("🔍 Buscar:", label_visibility="collapsed", placeholder="🔍 Buscar Patrimônio, Série, Equipamento, Marca, Cautela ou Endereço...")
+        with cf2:
+            ends_01 = sorted([e for e in df_ativos['enderecamento_01'].unique().tolist() if str(e).strip()]) if (not df_ativos.empty and 'enderecamento_01' in df_ativos.columns) else []
+            f_end1 = st.selectbox("Endereçamento 01:", ["Todos Endereços 01"] + ends_01, label_visibility="collapsed")
+        with cf3:
+            coords = sorted([c for c in df_ativos['coordenacao'].unique().tolist() if str(c).strip()]) if not df_ativos.empty else []
+            f_coord = st.selectbox("Coordenação:", ["Todas Coordenações"] + coords, label_visibility="collapsed")
+        with cf4:
+            with st.popover("👁️ Colunas", use_container_width=True):
+                st.caption("Selecione as colunas visíveis:")
+                if st.button("🔄 Mostrar Todas", key="btn_reset_inv", use_container_width=True):
                     st.session_state.saved_cols_inv = list(COLUNAS_ATIVOS)
                     salvar_preferencias_colunas(
                         st.session_state.saved_cols_inv,
                         st.session_state.saved_cols_mov,
-                        st.session_state.saved_cols_trm
+                        st.session_state.saved_cols_trm,
+                        st.session_state.get('saved_cols_fer')
                     )
                     st.rerun()
-            with c_sh1:
                 st.multiselect(
-                    "Ocultar ou Mostrar Colunas (Salvo automaticamente na nuvem):",
+                    "Colunas (Salvo na nuvem):",
                     options=COLUNAS_ATIVOS,
-                    default=st.session_state.saved_cols_inv,
+                    default=[c for c in st.session_state.saved_cols_inv if c in COLUNAS_ATIVOS],
                     key="ms_inv_key",
-                    on_change=update_cols_inv
+                    on_change=update_cols_inv,
+                    label_visibility="collapsed"
                 )
 
-        cols_para_exibir = st.session_state.saved_cols_inv if st.session_state.saved_cols_inv else COLUNAS_ATIVOS
+        cols_para_exibir = [c for c in st.session_state.saved_cols_inv if c in COLUNAS_ATIVOS]
+        if not cols_para_exibir:
+            cols_para_exibir = list(COLUNAS_ATIVOS)
         
         if not df_ativos.empty:
-            df_inv_view = df_ativos[COLUNAS_ATIVOS].copy()
-            if f_status != "Todos":
-                df_inv_view = df_inv_view[df_inv_view['status_sistema'] == f_status]
-            if f_coord != "Todas":
-                df_inv_view = df_inv_view[df_inv_view['coordenacao'] == f_coord]
+            df_base = df_ativos.copy()
+            for c_at in COLUNAS_ATIVOS:
+                if c_at not in df_base.columns:
+                    df_base[c_at] = ""
+
+            if f_coord != "Todas Coordenações":
+                df_base = df_base[df_base['coordenacao'] == f_coord]
+            if f_end1 != "Todos Endereços 01":
+                df_base = df_base[df_base['enderecamento_01'] == f_end1]
             if f_busca.strip():
                 t_b = f_busca.strip().lower()
-                mask_b = df_inv_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_b, na=False)).any(axis=1)
-                df_inv_view = df_inv_view[mask_b]
-            st.dataframe(df_inv_view[cols_para_exibir], use_container_width=True)
+                mask_b = df_base.astype(str).apply(lambda x: x.str.lower().str.contains(t_b, na=False)).any(axis=1)
+                df_base = df_base[mask_b]
+
+            st_s = df_base['status_sistema'].astype(str).str.upper().str.strip()
+            cd_s = df_base['condicoes_para_uso'].astype(str).str.upper().str.strip()
+            dias_oc = df_base['atualizado_em'].apply(lambda d: int(calcular_dias_sem_mov(d)) if str(calcular_dias_sem_mov(d)).isdigit() else 0)
+
+            df_g_disp = df_base[st_s == 'DISPONÍVEL']
+            df_g_uso = df_base[st_s == 'EM USO']
+            df_g_manut = df_base[st_s.str.contains('MANUTEN', na=False) | cd_s.str.contains('REPROV|INAPTO', na=False)]
+            df_g_trans = df_base[st_s.str.contains('TRÂNSITO|TRANSITO', na=False)]
+            df_g_baix = df_base[(st_s == 'BAIXADO') | cd_s.str.contains('INSERV', na=False)]
+            df_g_parado = df_base[(dias_oc > 90) & (st_s != 'BAIXADO')]
+
+            sub_abas_eqp = st.tabs([
+                f"🟢 Disponível ({len(df_g_disp)})",
+                f"🔵 Em Uso / Campo ({len(df_g_uso)})",
+                f"🟠 Em Manutenção / Lab ({len(df_g_manut)})",
+                f"🟡 Em Trânsito ({len(df_g_trans)})",
+                f"⚪ Baixado / Inservível ({len(df_g_baix)})",
+                f"⏳ Parado > 90 Dias ({len(df_g_parado)})"
+            ])
+
+            grupos_eqp = [df_g_disp, df_g_uso, df_g_manut, df_g_trans, df_g_baix, df_g_parado]
+            for idx_e, s_tab in enumerate(sub_abas_eqp):
+                with s_tab:
+                    df_item_e = grupos_eqp[idx_e]
+                    if not df_item_e.empty:
+                        df_show_e = df_item_e[cols_para_exibir].copy()
+                        df_show_e.insert(
+                            0, "Alerta",
+                            df_item_e.apply(
+                                lambda r: formatar_badge_alerta_ativo(
+                                    r.get('status_sistema', ''),
+                                    r.get('condicoes_para_uso', ''),
+                                    calcular_dias_sem_mov(r.get('atualizado_em', ''))
+                                ), axis=1
+                            )
+                        )
+                        st.dataframe(df_show_e, use_container_width=True, hide_index=True, height=440)
+                    else:
+                        st.info("Nenhum equipamento enquadrado nesta categoria no momento.")
         else:
             st.info("Nenhum ativo registado na base no momento.")
-            st.dataframe(pd.DataFrame(columns=cols_para_exibir), use_container_width=True)
             
-    # --- ABA 1: HISTÓRICO DE MOVIMENTAÇÕES ---
+    # --- ABA 1: CADASTRO MANUAL COM ENDEREÇAMENTO 01 E 02 ---
     with abas[1]:
-        with st.expander("👁️ Colunas Visíveis", expanded=False):
-            st.multiselect(
-                "Ocultar ou Mostrar Colunas (Movimentações):",
-                options=COLUNAS_MOV,
-                default=st.session_state.saved_cols_mov,
-                key="ms_mov_key",
-                on_change=update_cols_mov
-            )
-        cols_m_exibir = [c for c in (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV)
-        st.dataframe(df_mov[cols_m_exibir] if not df_mov.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True)
-
-    # --- ABA 2: TERMOS EMITIDOS ---
-    with abas[2]:
-        with st.expander("👁️ Colunas Visíveis", expanded=False):
-            st.multiselect(
-                "Ocultar ou Mostrar Colunas (Termos):",
-                options=COLUNAS_TERMOS,
-                default=st.session_state.saved_cols_trm,
-                key="ms_trm_key",
-                on_change=update_cols_trm
-            )
-        cols_t_exibir = [c for c in (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS)
-        st.dataframe(df_termos[cols_t_exibir] if not df_termos.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True)
-        
-    with abas[3]:
-        st.subheader("Cadastrar ou Atualizar Ativo Individual")
+        st.subheader("➕ Cadastrar ou Atualizar Equipamento Individual")
         with st.form("form_novo_ativo"):
-            colA, colB, colC = st.columns(3)
+            colA, colB, colC, colD = st.columns(4)
             with colA:
                 cad_patrimonio = st.text_input("Patrimônio / Placa *")
-                cad_equipamento = st.text_input("Equipamento")
+                cad_equipamento = st.text_input("Equipamento *")
                 cad_marca = st.text_input("Marca")
                 cad_modelo = st.text_input("Modelo")
-                cad_serie = st.text_input("Número de Série")
             with colB:
-                cad_item = st.text_input("Item")
-                cad_valor = st.text_input("Valor")
+                cad_serie = st.text_input("Número de Série")
+                cad_item = st.text_input("Item / Código D365")
+                cad_valor = st.text_input("Valor (R$)")
+                cad_nf = st.text_input("NF Procisa")
+            with colC:
                 cad_cautela = st.text_input("Cautela (Local/Responsável)", value="ALMOXARIFADO CENTRAL")
+                cad_end1 = st.text_input("Endereçamento 01 (Prateleira)")
+                cad_end2 = st.text_input("Endereçamento 02 (Caixa/Gaveta)")
+                cad_status = st.selectbox("Status no Sistema", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+            with colD:
                 cad_projeto = st.text_input("Projeto", value="ESTOQUE ALMOXARIFADO")
                 cad_coord = st.text_input("Coordenação", value="LOGÍSTICA / ALMOXARIFADO")
-            with colC:
-                cad_nf = st.text_input("NF Procisa")
-                cad_condicao = st.text_input("Condições para Uso", value="APTO")
-                cad_acessorios = st.text_input("Acessórios")
-                cad_status = st.selectbox("Status no Sistema", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+                cad_condicao = st.selectbox("Condições para Uso", ["APTO", "APTO COM RESSALVA", "EM MANUTENÇÃO", "REPROVADO", "INSERVÍVEL"])
+                cad_acessorios = st.text_input("Acessórios / Observações")
             
-            submit_cadastro = st.form_submit_button("💾 Salvar Ativo na Nuvem", type="primary")
+            submit_cadastro = st.form_submit_button("💾 Salvar Equipamento na Nuvem", type="primary")
             
             if submit_cadastro:
                 if cad_patrimonio.strip():
@@ -222,11 +252,13 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         'numero_serie': cad_serie.strip(),
                         'patrimonio': pat_limpo,
                         'cautela': cad_cautela.strip(),
+                        'enderecamento_01': cad_end1.strip().upper(),
+                        'enderecamento_02': cad_end2.strip().upper(),
                         'projeto': cad_projeto.strip(),
                         'coordenacao': cad_coord.strip(),
                         'nf_procisa': cad_nf.strip(),
                         'atualizado_em': datetime.now().strftime('%Y-%m-%d'),
-                        'condicoes_para_uso': cad_condicao.strip(),
+                        'condicoes_para_uso': cad_condicao,
                         'acessorios': cad_acessorios.strip(),
                         'status_sistema': cad_status
                     }
@@ -258,15 +290,58 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 else:
                     st.error("O campo 'Patrimônio' é obrigatório.")
 
+    # --- ABA 2: HISTÓRICO DE MOVIMENTAÇÕES ---
+    with abas[2]:
+        c_hm1, c_hm2 = st.columns([4.3, 0.7])
+        with c_hm1:
+            busca_hm = st.text_input("🔍 Filtrar Histórico de Movimentações:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Mov, Patrimônio, Origem, Destino ou Solicitante...")
+        with c_hm2:
+            with st.popover("👁️ Colunas", use_container_width=True):
+                st.multiselect(
+                    "Colunas (Movimentações):",
+                    options=COLUNAS_MOV,
+                    default=[c for c in st.session_state.saved_cols_mov if c in COLUNAS_MOV],
+                    key="ms_mov_key",
+                    on_change=update_cols_mov,
+                    label_visibility="collapsed"
+                )
+        cols_m_exibir = [c for c in (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else COLUNAS_MOV
+        df_m_show = df_mov.copy()
+        if not df_m_show.empty and busca_hm.strip():
+            tm = busca_hm.strip().lower()
+            df_m_show = df_m_show[df_m_show.astype(str).apply(lambda x: x.str.lower().str.contains(tm, na=False)).any(axis=1)]
+        st.dataframe(df_m_show[cols_m_exibir] if not df_m_show.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True, hide_index=True, height=440)
+
+    # --- ABA 3: TERMOS EMITIDOS ---
+    with abas[3]:
+        c_ht1, c_ht2 = st.columns([4.3, 0.7])
+        with c_ht1:
+            busca_ht = st.text_input("🔍 Filtrar Termos Emitidos:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Termo, Patrimônio, Responsável ou Matrícula...")
+        with c_ht2:
+            with st.popover("👁️ Colunas", use_container_width=True):
+                st.multiselect(
+                    "Colunas (Termos):",
+                    options=COLUNAS_TERMOS,
+                    default=[c for c in st.session_state.saved_cols_trm if c in COLUNAS_TERMOS],
+                    key="ms_trm_key",
+                    on_change=update_cols_trm,
+                    label_visibility="collapsed"
+                )
+        cols_t_exibir = [c for c in (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else COLUNAS_TERMOS
+        df_t_show = df_termos.copy()
+        if not df_t_show.empty and busca_ht.strip():
+            tt = busca_ht.strip().lower()
+            df_t_show = df_t_show[df_t_show.astype(str).apply(lambda x: x.str.lower().str.contains(tt, na=False)).any(axis=1)]
+        st.dataframe(df_t_show[cols_t_exibir] if not df_t_show.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True, hide_index=True, height=440)
+
+    # --- ABA 4: IMPORTAR / EXPORTAR ---
     with abas[4]:
-        st.subheader("📤 Exportar Relatórios do Sistema (Download)")
-        st.write("Extraia a qualquer momento as bases atualizadas diretamente da nuvem em formato Excel (`.xlsx`).")
-        
+        st.subheader("📤 Exportar Relatórios do Sistema (.xlsx)")
         stamp = datetime.now().strftime('%Y%m%d_%H%M')
         c_exp1, c_exp2, c_exp3 = st.columns(3)
         
         with c_exp1:
-            df_a_exp = df_ativos[COLUNAS_ATIVOS] if not df_ativos.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
+            df_a_exp = df_ativos[[c for c in COLUNAS_ATIVOS if c in df_ativos.columns]] if not df_ativos.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
             if st.download_button("📥 Baixar Relatório de Ativos (.xlsx)", data=converter_df_excel_simples(df_a_exp, "Ativos"), file_name=f"Ativos_Procisa_{stamp}.xlsx", use_container_width=True):
                 registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Ativos", f"Download de {len(df_a_exp)} ativos.")
                 
@@ -303,7 +378,7 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
         
         col_up1, col_up2 = st.columns(2)
         with col_up1:
-            st.markdown("##### 📦 Planilha de Equipamentos (V1.2)")
+            st.markdown("##### 📦 Planilha de Equipamentos")
             arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
             if arquivo_up:
                 try:
@@ -312,6 +387,10 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                     
                     if 'status_sistema' not in df_up.columns:
                         df_up['status_sistema'] = 'Disponível'
+                    if 'enderecamento_01' not in df_up.columns:
+                        df_up['enderecamento_01'] = ''
+                    if 'enderecamento_02' not in df_up.columns:
+                        df_up['enderecamento_02'] = ''
                     
                     if 'patrimonio' not in df_up.columns:
                         st.error(f"A coluna 'patrimonio' não foi encontrada. Colunas lidas: {list(df_up.columns)}")
@@ -379,17 +458,17 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                 except Exception as e:
                     st.error(f"Erro ao ler arquivo: {e}")
 
-    # --- ABA DE EXCLUSÃO POR SELEÇÃO DE LINHAS (MASTER) ---
+    # --- ABA 5: EXCLUSÃO POR SELEÇÃO DE LINHAS (MASTER) ---
     if st.session_state.perfil == 'Master':
         with abas[5]:
             st.subheader("❌ Exclusão de Registos por Seleção (Acesso Restrito Master)")
-            
             tipo_exclusao = st.radio("Selecione a Tabela para Exclusão:", ["📦 Ativos (Equipamentos)", "👥 Colaboradores (Empregados)"], horizontal=True)
             
             if tipo_exclusao.startswith("📦"):
                 if not df_ativos.empty:
                     busca_del = st.text_input("🔍 Filtrar ativos antes de marcar (Patrimônio, Série, Equipamento ou Cautela):")
-                    df_del_view = df_ativos[COLUNAS_ATIVOS].copy()
+                    cols_del_at = [c for c in COLUNAS_ATIVOS if c in df_ativos.columns]
+                    df_del_view = df_ativos[cols_del_at].copy()
                     if busca_del.strip():
                         t_del = busca_del.strip().lower()
                         mask_del = df_del_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_del, na=False)).any(axis=1)
@@ -401,10 +480,9 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         df_del_view,
                         hide_index=True,
                         use_container_width=True,
+                        height=400,
                         disabled=[c for c in df_del_view.columns if c != "Excluir"],
-                        column_config={
-                            "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)
-                        },
+                        column_config={"Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)},
                         key="editor_del_ativos"
                     )
                     
@@ -440,10 +518,9 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                         df_emp_view,
                         hide_index=True,
                         use_container_width=True,
+                        height=400,
                         disabled=[c for c in df_emp_view.columns if c != "Excluir"],
-                        column_config={
-                            "Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)
-                        },
+                        column_config={"Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)},
                         key="editor_del_emp"
                     )
                     
@@ -471,12 +548,12 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
 # MÓDULO 6: GESTÃO DE USUÁRIOS (MASTER)
 # ==========================================
 def render_modulo_usuarios(df_usuarios):
-    st.header("👥 Painel Admin - Gestão de Usuários")
+    st.subheader("👥 Painel Admin - Gestão de Usuários")
     
     aba_listar, aba_novo, aba_editar = st.tabs(["Visão Geral", "Novo Usuário", "Editar / Resetar Senha"])
     
     with aba_listar:
-        st.dataframe(df_usuarios, use_container_width=True)
+        st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
         
     with aba_novo:
         with st.form("form_novo_user"):
@@ -563,7 +640,7 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
         st.error("⛔ Acesso negado. Este módulo é exclusivo para o perfil Gestor (Master).")
         st.stop()
         
-    st.header("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
+    st.subheader("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
     
     info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados], limite_mb=500.0)
     st.markdown(
@@ -610,17 +687,6 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
     if not df_auditoria.empty:
         df_auditoria = df_auditoria.sort_values(by='Data / Hora', ascending=False).reset_index(drop=True)
         
-    col_a1, col_a2, col_a3 = st.columns(3)
-    total_ev = len(df_auditoria)
-    total_uploads = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('UPLOAD|CADASTRO|EXCLUSÃO', na=False)]) if not df_auditoria.empty else 0
-    total_movs = len(df_auditoria[df_auditoria['Tipo de Evento'].str.contains('MOV|CONFERÊNCIA|TERMO|VALIDAÇÃO', na=False)]) if not df_auditoria.empty else 0
-    
-    col_a1.metric("Total de Eventos Auditados", total_ev)
-    col_a2.metric("Cargas / Cadastros / Exclusões", total_uploads)
-    col_a3.metric("Operações de Campo / Almox.", total_movs)
-    
-    st.divider()
-    
     if not df_auditoria.empty:
         col_f1, col_f2 = st.columns(2)
         with col_f1:
@@ -641,7 +707,7 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
             )
             df_filtrado = df_filtrado[mask]
             
-        st.dataframe(df_filtrado, use_container_width=True, height=450)
+        st.dataframe(df_filtrado, use_container_width=True, hide_index=True, height=440)
         
         out_aud = io.BytesIO()
         with pd.ExcelWriter(out_aud, engine='openpyxl') as writer:
