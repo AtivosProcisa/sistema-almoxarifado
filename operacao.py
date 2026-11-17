@@ -12,6 +12,160 @@ limpar_texto_matricula = nuvem.limpar_texto_matricula
 exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
 gerar_termo_pdf = pdf_termo.gerar_termo_pdf
 
+# ==========================================
+# SELETOR ESTILO FILTRO DO EXCEL PARA EQUIPAMENTOS (BUSCA EXATA + TABELA COM CHECKBOX)
+# ==========================================
+def render_seletor_excel_equipamentos(df_fonte, chave_unica, multiplo=True, altura=230):
+    """
+    Substitui o st.multiselect tradicional por um filtro estilo Excel idêntico ao do Ferramental:
+    - Escolha da coluna específica (Patrimônio, Número de Série, Item D365, Equipamento/Marca/Modelo, Endereço ou Todos)
+    - Opção de Busca Exata (para que digitar '150' traga apenas o patrimônio/item '150' e não todos os que contêm 150)
+    - Tabela interativa com caixinha [☑️] que mantém os itens selecionados mesmo ao trocar o termo de busca.
+    """
+    state_sel = f"sel_excel_pats_{chave_unica}"
+    if state_sel not in st.session_state:
+        st.session_state[state_sel] = set()
+
+    if df_fonte.empty:
+        st.warning("Nenhum equipamento disponível na base para seleção.")
+        return pd.DataFrame()
+
+    c_f1, c_f2, c_f3, c_f4 = st.columns([1.5, 2.1, 0.9, 0.7])
+    with c_f1:
+        col_alvo = st.selectbox(
+            "Filtrar Coluna:",
+            [
+                "Patrimônio",
+                "Número de Série",
+                "Item / Código D365",
+                "Equipamento / Marca / Modelo",
+                "Endereçamento 01/02",
+                "Cautela / Responsável",
+                "Todos os Campos"
+            ],
+            key=f"col_ex_eqp_{chave_unica}",
+            label_visibility="collapsed"
+        )
+    with c_f3:
+        padrao_exato = True if col_alvo in ["Patrimônio", "Número de Série", "Item / Código D365"] else False
+        modo_exato = st.checkbox(
+            "🎯 Busca Exata",
+            value=padrao_exato,
+            key=f"exato_eqp_{chave_unica}",
+            help="Quando marcado, digitar um número busca exatamente aquele código, sem listar outros que apenas comecem com os mesmos dígitos."
+        )
+    with c_f2:
+        termo_b = st.text_input(
+            "Digite para filtrar:",
+            placeholder="🔍 Digite código(s) separados por vírgula ou descrição...",
+            key=f"txt_ex_eqp_{chave_unica}",
+            label_visibility="collapsed"
+        )
+    with c_f4:
+        if st.button(f"🧹 Limpar ({len(st.session_state[state_sel])})", key=f"clr_ex_eqp_{chave_unica}", use_container_width=True):
+            st.session_state[state_sel] = set()
+            st.rerun()
+
+    df_view = df_fonte.copy()
+    for c_garantir in ['patrimonio', 'item', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela', 'enderecamento_01', 'enderecamento_02']:
+        if c_garantir not in df_view.columns:
+            df_view[c_garantir] = ""
+
+    if termo_b.strip():
+        termos_lista = [t.strip().upper() for t in termo_b.replace(";", ",").split(",") if t.strip()]
+        mask_total = pd.Series(False, index=df_view.index)
+
+        for t_item in termos_lista:
+            if col_alvo == "Patrimônio":
+                s_col = df_view['patrimonio'].fillna("").astype(str).str.strip().str.upper()
+            elif col_alvo == "Número de Série":
+                s_col = df_view['numero_serie'].fillna("").astype(str).str.strip().str.upper()
+            elif col_alvo == "Item / Código D365":
+                s_col = df_view['item'].fillna("").astype(str).str.strip().str.upper()
+            elif col_alvo == "Equipamento / Marca / Modelo":
+                s_col = (
+                    df_view['equipamento'].fillna("").astype(str) + " " +
+                    df_view['marca'].fillna("").astype(str) + " " +
+                    df_view['modelo'].fillna("").astype(str)
+                ).str.upper()
+            elif col_alvo == "Endereçamento 01/02":
+                s_col = (
+                    df_view['enderecamento_01'].fillna("").astype(str) + " " +
+                    df_view['enderecamento_02'].fillna("").astype(str)
+                ).str.upper()
+            elif col_alvo == "Cautela / Responsável":
+                s_col = df_view['cautela'].fillna("").astype(str).str.upper()
+            else:
+                s_col = (
+                    df_view['patrimonio'].fillna("").astype(str) + " " +
+                    df_view['numero_serie'].fillna("").astype(str) + " " +
+                    df_view['item'].fillna("").astype(str) + " " +
+                    df_view['equipamento'].fillna("").astype(str) + " " +
+                    df_view['marca'].fillna("").astype(str) + " " +
+                    df_view['modelo'].fillna("").astype(str) + " " +
+                    df_view['enderecamento_01'].fillna("").astype(str) + " " +
+                    df_view['cautela'].fillna("").astype(str)
+                ).str.upper()
+
+            if modo_exato and col_alvo in ["Patrimônio", "Número de Série", "Item / Código D365"]:
+                mask_total = mask_total | (s_col == t_item)
+            elif modo_exato:
+                mask_total = mask_total | s_col.str.split().apply(lambda palavras: t_item in palavras)
+            else:
+                mask_total = mask_total | s_col.str.contains(t_item, regex=False, na=False)
+
+        # Mantém visíveis na tabela os itens filtrados agora + os que já haviam sido selecionados antes
+        mask_ja_marcados = df_view['patrimonio'].astype(str).isin(st.session_state[state_sel])
+        df_view = df_view[mask_total | mask_ja_marcados].copy()
+
+    df_grid = pd.DataFrame({
+        'Selecionar': df_view['patrimonio'].astype(str).isin(st.session_state[state_sel]),
+        'Patrimônio': df_view['patrimonio'].astype(str),
+        'Item D365': df_view['item'].astype(str),
+        'Equipamento': df_view['equipamento'].astype(str),
+        'Marca / Modelo': (df_view['marca'].astype(str) + " " + df_view['modelo'].astype(str)).str.strip(),
+        'Nº de Série': df_view['numero_serie'].astype(str),
+        'Status': df_view['status_sistema'].astype(str),
+        'Cautela / Local': df_view['cautela'].astype(str),
+        'Endereço 01': df_view['enderecamento_01'].astype(str),
+        'Endereço 02': df_view['enderecamento_02'].astype(str)
+    })
+
+    df_grid = df_grid.sort_values(by=['Selecionar', 'Patrimônio'], ascending=[False, True]).reset_index(drop=True)
+
+    cols_travadas = ['Patrimônio', 'Item D365', 'Equipamento', 'Marca / Modelo', 'Nº de Série', 'Status', 'Cautela / Local', 'Endereço 01', 'Endereço 02']
+    editado = st.data_editor(
+        df_grid,
+        hide_index=True,
+        use_container_width=True,
+        height=altura,
+        disabled=cols_travadas,
+        column_config={
+            'Selecionar': st.column_config.CheckboxColumn("☑️ Selecionar", default=False, width="small"),
+            'Patrimônio': st.column_config.TextColumn("Patrimônio", width="small"),
+            'Item D365': st.column_config.TextColumn("Item D365", width="small"),
+            'Status': st.column_config.TextColumn("Status", width="small")
+        },
+        key=f"grid_ex_eqp_{chave_unica}"
+    )
+
+    pats_visiveis = set(df_grid['Patrimônio'].tolist())
+    pats_marcados_agora = set(editado[editado['Selecionar'] == True]['Patrimônio'].tolist())
+
+    if not multiplo and len(pats_marcados_agora) > 1:
+        novos_clicados = list(pats_marcados_agora - st.session_state[state_sel])
+        pat_manter = novos_clicados[0] if novos_clicados else list(pats_marcados_agora)[0]
+        st.session_state[state_sel] = {pat_manter}
+        st.rerun()
+    else:
+        st.session_state[state_sel] = (st.session_state[state_sel] - pats_visiveis) | pats_marcados_agora
+
+    df_selecionados_final = df_fonte[df_fonte['patrimonio'].astype(str).isin(st.session_state[state_sel])].copy()
+    if not df_selecionados_final.empty:
+        resumo_sel = ", ".join([f"Pat {r['patrimonio']} ({r.get('equipamento','')})" for _, r in df_selecionados_final.iterrows()])
+        st.caption(f"✅ **{len(df_selecionados_final)} equipamento(s) marcado(s):** {resumo_sel}")
+    return df_selecionados_final
+
 def _montar_df_pdf_equipamentos(df_ativos_selecionados, coord_padrao="", nf_padrao=""):
     """Prepara o DataFrame padronizado para o gerador de PDF elástico (idêntico ao Ferramental)."""
     linhas_pdf = []
@@ -40,11 +194,11 @@ def _montar_df_pdf_equipamentos(df_ativos_selecionados, coord_padrao="", nf_padr
     return pd.DataFrame(linhas_pdf)
 
 # ==========================================
-# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (MÚLTIPLOS ATIVOS ESTILO PROCV)
+# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (COM SELETOR ESTILO EXCEL)
 # ==========================================
 def render_modulo_solicitacao(df_ativos, df_empregados):
-    st.subheader("📝 Solicitação de Movimentação de Equipamentos (Individual ou Múltiplos Itens)")
-    st.caption("Selecione a modalidade e busque um ou vários equipamentos (estilo PROCV). Os dados de destino são preenchidos automaticamente.")
+    st.subheader("📝 Solicitação de Movimentação de Equipamentos (Busca Estilo Excel)")
+    st.caption("Selecione a modalidade, filtre os equipamentos com precisão na tabela estilo Excel (Patrimônio, Série, Item D365 ou Descrição) e marque um ou vários itens.")
     
     opcoes_mov = [
         "MOV-01 | Almoxarifado -> Colaborador", 
@@ -53,31 +207,18 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
         "MOV-04 | Almoxarifado -> Laboratório",
         "MOV-05 | Laboratório -> Almoxarifado"
     ]
-    tipo_mov = st.selectbox("1️⃣ Selecione o Tipo de Movimentação:", opcoes_mov)
-    cod_tipo = tipo_mov[:6]
-    
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        if not df_ativos.empty:
-            opcoes_ativos = df_ativos.apply(
-                lambda r: f"Pat: {r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | Série: {r.get('numero_serie','')} | Status: {r.get('status_sistema','')} [PAT: {r['patrimonio']}]",
-                axis=1
-            ).tolist()
-        else:
-            opcoes_ativos = []
-
-        ativos_selecionados_str = st.multiselect(
-            "2️⃣ Busque e Selecione o(s) Equipamento(s) (Patrimônio, Série ou Descrição):",
-            options=opcoes_ativos
-        )
+    c_top1, c_top2 = st.columns(2)
+    with c_top1:
+        tipo_mov = st.selectbox("1️⃣ Selecione o Tipo de Movimentação:", opcoes_mov)
+        cod_tipo = tipo_mov[:6]
     
     matricula_busca = ""
     unidade_escolhida = ""
     emp_dict = {}
     
-    with col_b2:
+    with c_top2:
         if cod_tipo == "MOV-01":
-            matricula_busca = st.text_input("3️⃣ Digite a Matrícula do Colaborador (Destino) e pressione Enter:")
+            matricula_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador (Destino) e pressione Enter:")
             mat_limpa = limpar_texto_matricula(matricula_busca)
             if mat_limpa and not df_empregados.empty:
                 match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
@@ -94,7 +235,7 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                 unidades_existentes += df_ativos['coordenacao'].dropna().astype(str).tolist()
             unidades_limpas = sorted(list({u.strip() for u in unidades_existentes if u.strip() and u.strip().lower() != 'none'}))
             opcoes_unid = ["Digitar Manualmente..."] + unidades_limpas
-            sel_unid = st.selectbox("3️⃣ Selecione a Unidade / Coordenação de Destino:", opcoes_unid)
+            sel_unid = st.selectbox("2️⃣ Selecione a Unidade / Coordenação de Destino:", opcoes_unid)
             if sel_unid == "Digitar Manualmente...":
                 unidade_escolhida = st.text_input("Nome da Unidade de Destino:")
             else:
@@ -102,17 +243,11 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
         else:
             st.info(f"⚡ **Auto-Preenchimento Ativo:** Destino configurado automaticamente para **{tipo_mov.split('->')[1].strip()}**.")
 
-    if ativos_selecionados_str:
-        pats_escolhidos = [s.split("[PAT: ")[1].replace("]", "") for s in ativos_selecionados_str]
-        df_sel_ativos = df_ativos[df_ativos['patrimonio'].isin(pats_escolhidos)].copy()
+    st.markdown("###### 3️⃣ Busque (Estilo Filtro Excel) e marque na tabela o(s) Equipamento(s) para movimentar:")
+    df_sel_ativos = render_seletor_excel_equipamentos(df_ativos, "solic_mov_eqp", multiplo=True, altura=230)
+
+    if not df_sel_ativos.empty:
         primeiro_reg = df_sel_ativos.iloc[0].to_dict()
-
-        st.markdown(f"###### 📦 {len(df_sel_ativos)} Equipamento(s) Selecionado(s) para o Lote:")
-        st.dataframe(
-            df_sel_ativos[['patrimonio', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela']],
-            use_container_width=True, hide_index=True
-        )
-
         cautela_atual = str(primeiro_reg.get('cautela', ''))
         origem_auto = cautela_atual if cautela_atual else "ALMOXARIFADO CENTRAL"
         
@@ -146,7 +281,7 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             mat_auto = ""
 
         with st.form("form_solicitacao_multipla"):
-            st.markdown("###### Confirme os detalhes da destinação do lote:")
+            st.markdown("###### 4️⃣ Confirme os detalhes da destinação do lote:")
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.text_input("Modalidade Selecionada", value=tipo_mov, disabled=True)
@@ -194,6 +329,7 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                     
                     try:
                         supabase.table('movimentacoes').insert(novas_movs).execute()
+                        st.session_state["sel_excel_pats_solic_mov_eqp"] = set()
                         st.cache_data.clear()
                         registrar_log_auditoria(
                             "SOLICITAÇÃO EM LOTE", 
@@ -201,6 +337,7 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                             f"Lote MOV-{stamp_lote} ({cod_tipo}) registrado para Destino: {destino.strip()}."
                         )
                         st.success(f"✅ {len(novas_movs)} equipamento(s) enviado(s) para a fila da Central de Validações!")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar solicitação em lote: {e}")
                 else:
@@ -257,7 +394,6 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
         st.divider()
         st.markdown("###### 🔄 Proceder com a Validação (Agrupada por Lote/Destinatário ou Individual)")
 
-        # Extrai o prefixo do lote (ex: MOV-20261117-120000) ou agrupa por Destino + Tipo
         def _extrair_chave_lote(row):
             idm = str(row.get('id_mov', ''))
             partes = idm.split('-')
@@ -369,42 +505,41 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
                         st.error("Complete as 3 caixas de verificação antes de validar.")
 
     st.divider()
-    with st.expander("🛠️ Movimentação Avulsa (Excepcional / Sem solicitação prévia)"):
-        pat_avulso = st.text_input("Bipar/Digitar Patrimônio ou Série:")
-        if pat_avulso:
-            ativo_avulso = buscar_ativo(pat_avulso, df_ativos)
-            if not ativo_avulso.empty:
-                reg_avulso = ativo_avulso.iloc[0].to_dict()
-                st.write(f"Ativo: {reg_avulso.get('marca')} {reg_avulso.get('modelo')} | Cautela Atual: {reg_avulso.get('cautela')}")
+    with st.expander("🛠️ Movimentação Avulsa (Excepcional / Sem solicitação prévia — Busca Estilo Excel)"):
+        df_av_sel = render_seletor_excel_equipamentos(df_ativos, "avulso_val_eqp", multiplo=True, altura=190)
+        if not df_av_sel.empty:
+            reg_av0 = df_av_sel.iloc[0].to_dict()
+            with st.form("form_avulso"):
+                cA, cB, cC = st.columns(3)
+                with cA:
+                    status_av = st.selectbox("Status", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+                with cB:
+                    cautela_av = st.text_input("Nova Cautela", value=reg_av0.get('cautela', ''))
+                with cC:
+                    end1_av = st.text_input("Endereçamento 01", value=reg_av0.get('enderecamento_01', ''))
                 
-                with st.form("form_avulso"):
-                    cA, cB = st.columns(2)
-                    with cA:
-                        status_av = st.selectbox("Status", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
-                    with cB:
-                        cautela_av = st.text_input("Nova Cautela", value=reg_avulso.get('cautela', ''))
-                    
-                    if st.form_submit_button("✅ Forçar Atualização"):
-                        dados_update_av = {
-                            'status_sistema': status_av,
-                            'cautela': cautela_av.strip(),
-                            'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-                        }
-                        try:
-                            supabase.table('ativos_master').update(dados_update_av).eq('patrimonio', reg_avulso['patrimonio']).execute()
-                            st.cache_data.clear()
-                            registrar_log_auditoria("MOVIMENTAÇÃO AVULSA", reg_avulso['patrimonio'], f"Atualizado para {status_av} / {cautela_av}")
-                            st.success("✅ Atualizado com sucesso.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro: {e}")
-            else:
-                st.warning("Não encontrado.")
+                if st.form_submit_button(f"✅ Forçar Atualização em {len(df_av_sel)} Equipamento(s)"):
+                    try:
+                        for _, r_av in df_av_sel.iterrows():
+                            pat_av_i = str(r_av['patrimonio']).strip()
+                            supabase.table('ativos_master').update({
+                                'status_sistema': status_av,
+                                'cautela': cautela_av.strip(),
+                                'enderecamento_01': end1_av.strip().upper(),
+                                'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                            }).eq('patrimonio', pat_av_i).execute()
+                        st.session_state["sel_excel_pats_avulso_val_eqp"] = set()
+                        st.cache_data.clear()
+                        registrar_log_auditoria("MOVIMENTAÇÃO AVULSA", f"{len(df_av_sel)} itens", f"Atualizado para {status_av} / {cautela_av}")
+                        st.success("✅ Atualizado com sucesso.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro: {e}")
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# MÓDULO 4: GESTÃO DE TERMOS E DIVERGÊNCIAS (COM PDF MULTI-ITENS E 2ª VIA DINÂMICA)
+# MÓDULO 4: GESTÃO DE TERMOS E DIVERGÊNCIAS (COM SELETOR ESTILO EXCEL)
 # ==========================================
 def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empregados):
     st.subheader("📄 Gestão de Termos (PDF Multi-Equipamentos) e Divergências")
@@ -430,7 +565,6 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
         "🚨 Tratar Divergências"
     ])
     
-    # --- SUB-ABA 0: FILA DE IMPRESSÃO CONSOLIDADA POR LOTE / COLABORADOR ---
     with aba_fila:
         st.caption("Termos gerados pelas validações (MOV-01). Lotes do mesmo colaborador são agrupados automaticamente num único PDF.")
         termos_pendentes = df_termos[df_termos['status_termo'] == 'Pendente Impressão'].copy() if not df_termos.empty else pd.DataFrame()
@@ -459,7 +593,7 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                     pats_fila = df_sub_fila['patrimonio'].astype(str).tolist()
                     mat = limpar_texto_matricula(t_info['matricula'])
                     
-                    ativos_match = df_ativos[df_ativos['patrimonio'].isin(pats_fila)] if not df_ativos.empty else pd.DataFrame()
+                    ativos_match = df_ativos[df_ativos['patrimonio'].astype(str).isin(pats_fila)] if not df_ativos.empty else pd.DataFrame()
                     emp_match = df_empregados[df_empregados['matricula'].astype(str) == mat] if (not df_empregados.empty and mat) else pd.DataFrame()
                     
                     if not ativos_match.empty:
@@ -494,7 +628,6 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
         else:
             st.success("🎉 Nenhum termo pendente na fila de impressão.")
 
-    # --- SUB-ABA 1: REIMPRESSÃO DINÂMICA DE TERMOS EMITIDOS (SEM ARMAZENAR ARQUIVO) ---
     with aba_reimp:
         st.markdown("###### 🔄 Central de Reimpressão de Termos Emitidos (2ª Via Sob Demanda)")
         st.caption("Reconstrói o PDF oficial na hora (individual ou consolidado por lote/colaborador) sem ocupar espaço no banco.")
@@ -517,7 +650,7 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                 pats_2via = df_itens_2via['patrimonio'].astype(str).tolist()
                 mat = limpar_texto_matricula(t_info['matricula'])
                 
-                ativos_match = df_ativos[df_ativos['patrimonio'].isin(pats_2via)] if not df_ativos.empty else pd.DataFrame()
+                ativos_match = df_ativos[df_ativos['patrimonio'].astype(str).isin(pats_2via)] if not df_ativos.empty else pd.DataFrame()
                 emp_match = df_empregados[df_empregados['matricula'].astype(str) == mat] if (not df_empregados.empty and mat) else pd.DataFrame()
                 
                 if not ativos_match.empty:
@@ -542,26 +675,20 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
         else:
             st.info("Nenhum termo registado no histórico.")
 
-    # --- SUB-ABA 2: EMISSÃO EXCEPCIONAL MULTI-ITENS E BAIXA DE TERMO ---
     with aba_avulso:
         acao_trm = st.radio("Selecione a Operação:", ["📤 Emitir Novo Termo Excepcional (Multi-Equipamentos)", "📥 Encerrar / Baixar Termo Ativo (Devolução)"], horizontal=True)
         if acao_trm.startswith("📤"):
-            c_t1, c_t2 = st.columns(2)
-            with c_t1:
-                op_at_trm = df_ativos.apply(
-                    lambda r: f"Pat: {r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} [PAT: {r['patrimonio']}]",
-                    axis=1
-                ).tolist() if not df_ativos.empty else []
-                sel_ats_trm = st.multiselect("1️⃣ Selecione o(s) Equipamento(s) para o Termo:", op_at_trm)
-            with c_t2:
-                matricula_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
-                mat_limpa = limpar_texto_matricula(matricula_busca)
-                emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
-                if mat_limpa and not df_empregados.empty:
-                    match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
-                    if not match_emp.empty:
-                        emp_dict = match_emp.iloc[0].fillna("").to_dict()
-                        st.success(f"👤 Colaborador: {emp_dict.get('nome', '')}")
+            st.markdown("###### 1️⃣ Busque (Estilo Excel) e marque o(s) Equipamento(s) para o Termo:")
+            ativos_info_t = render_seletor_excel_equipamentos(df_ativos, "termo_avulso_eqp", multiplo=True, altura=210)
+
+            matricula_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
+            mat_limpa = limpar_texto_matricula(matricula_busca)
+            emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
+            if mat_limpa and not df_empregados.empty:
+                match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
+                if not match_emp.empty:
+                    emp_dict = match_emp.iloc[0].fillna("").to_dict()
+                    st.success(f"👤 Colaborador: {emp_dict.get('nome', '')}")
 
             with st.form("form_termo_avulso_multi"):
                 colA, colB = st.columns(2)
@@ -575,9 +702,8 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                     projeto_termo = st.text_input("Projeto", value=emp_dict.get('projeto', ''))
                 submit_termo = st.form_submit_button("🖨️ Gerar PDF Único do Termo", type="primary")
                 
-            if submit_termo and sel_ats_trm and responsavel_termo.strip():
-                pats_t = [s.split("[PAT: ")[1].replace("]", "") for s in sel_ats_trm]
-                ativos_info_t = df_ativos[df_ativos['patrimonio'].isin(pats_t)]
+            if submit_termo and (not ativos_info_t.empty) and responsavel_termo.strip():
+                pats_t = ativos_info_t['patrimonio'].astype(str).tolist()
                 mat_salvar = limpar_texto_matricula(matricula_termo)
                 stamp_av = datetime.now().strftime('%Y%m%d%H%M%S')
 
@@ -603,6 +729,7 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                         'status_termo': 'Ativo'
                     })
                 supabase.table('termos').insert(novos_termos_av).execute()
+                st.session_state["sel_excel_pats_termo_avulso_eqp"] = set()
                 st.cache_data.clear()
                 registrar_log_auditoria("EMISSÃO DE TERMO (AVULSO)", f"{len(pats_t)} ativos", f"Termo emitido para {responsavel_termo.strip()}.")
                 st.session_state.pdf_termo_pronto = {
@@ -612,28 +739,25 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                 }
                 st.rerun()
         else:
-            pat_baixa = st.text_input("Patrimônio ou Série devolvido:")
-            if st.button("Baixar Termo Ativo", type="primary"):
-                ativo_info_baixa = buscar_ativo(pat_baixa, df_ativos)
-                if not ativo_info_baixa.empty:
-                    pat_real = ativo_info_baixa.iloc[0]['patrimonio']
-                    termos_ativos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
-                    if not termos_ativos.empty:
-                        for _, t_r in termos_ativos.iterrows():
-                            supabase.table('termos').update({
-                                'data_baixa': datetime.now().strftime('%Y-%m-%d'),
-                                'status_termo': 'Encerrado'
-                            }).eq('id_termo', t_r['id_termo']).execute()
-                        st.cache_data.clear()
-                        registrar_log_auditoria("BAIXA DE TERMO", pat_real, "Termo encerrado por devolução.")
-                        st.success("✅ Termo encerrado com sucesso!")
-                        st.rerun()
-                    else:
-                        st.warning("Nenhum termo ativo encontrado para este equipamento.")
+            st.markdown("###### Busque e marque o(s) equipamento(s) devolvido(s) para encerrar o Termo:")
+            df_bx_sel = render_seletor_excel_equipamentos(df_ativos, "baixa_trm_eqp", multiplo=True, altura=190)
+            if not df_bx_sel.empty and st.button(f"📥 Baixar Termo(s) Ativo(s) ({len(df_bx_sel)} selecionado(s))", type="primary"):
+                pats_bx = df_bx_sel['patrimonio'].astype(str).tolist()
+                termos_ativos = df_termos[(df_termos['patrimonio'].astype(str).isin(pats_bx)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
+                if not termos_ativos.empty:
+                    for _, t_r in termos_ativos.iterrows():
+                        supabase.table('termos').update({
+                            'data_baixa': datetime.now().strftime('%Y-%m-%d'),
+                            'status_termo': 'Encerrado'
+                        }).eq('id_termo', t_r['id_termo']).execute()
+                    st.session_state["sel_excel_pats_baixa_trm_eqp"] = set()
+                    st.cache_data.clear()
+                    registrar_log_auditoria("BAIXA DE TERMO", f"{len(pats_bx)} itens", "Termo(s) encerrado(s) por devolução.")
+                    st.success("✅ Termo(s) encerrado(s) com sucesso!")
+                    st.rerun()
                 else:
-                    st.error("Patrimônio ou série não localizado.")
+                    st.warning("Nenhum termo ativo encontrado para o(s) equipamento(s) selecionado(s).")
 
-    # --- SUB-ABA 3: DIVERGÊNCIAS ---
     with aba_diverg:
         pendentes = df_diverg[df_diverg['status_resolucao'] != 'Resolvido'] if not df_diverg.empty else pd.DataFrame()
         c1, c2 = st.columns(2)
@@ -686,53 +810,43 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# MÓDULO 5: DIAGNÓSTICO (LABORATÓRIO)
+# MÓDULO 5: DIAGNÓSTICO (LABORATÓRIO - COM SELETOR ESTILO EXCEL)
 # ==========================================
 def render_modulo_laboratorio(df_ativos):
-    st.subheader("🔬 Laboratório Técnico")
-    patrimonio_lab = st.text_input("Patrimônio ou Série em Análise:")
-    
-    if patrimonio_lab.strip():
-        ativo_match = buscar_ativo(patrimonio_lab, df_ativos)
-        if not ativo_match.empty:
-            reg_lab = ativo_match.iloc[0]
-            st.info(f"**Equipamento:** {reg_lab.get('equipamento')} - {reg_lab.get('marca')} {reg_lab.get('modelo')} | **Condição Atual:** {reg_lab.get('condicoes_para_uso')}")
-        else:
-            st.warning("⚠️ Patrimônio ou série não localizado.")
+    st.subheader("🔬 Laboratório Técnico (Busca Estilo Excel)")
+    st.markdown("###### 1️⃣ Filtre e marque o(s) equipamento(s) em análise:")
+    df_lab_sel = render_seletor_excel_equipamentos(df_ativos, "lab_eqp_sel", multiplo=True, altura=210)
             
-    resultado = st.radio("Parecer Técnico:", ["APTO", "APTO COM RESSALVA", "REPARADO", "CALIBRADO", "REPROVADO", "INSERVÍVEL"], horizontal=True)
+    resultado = st.radio("2️⃣ Parecer Técnico:", ["APTO", "APTO COM RESSALVA", "REPARADO", "CALIBRADO", "REPROVADO", "INSERVÍVEL"], horizontal=True)
     acessorios_lab = st.text_input("Atualizar Observação / Acessórios (Opcional):")
     
-    if st.button("Atualizar Base com Parecer Técnico", type="primary"):
-        ativo_match = buscar_ativo(patrimonio_lab, df_ativos)
-        
-        if not ativo_match.empty:
-            pat_real = ativo_match.iloc[0]['patrimonio']
-            cond_antiga = ativo_match.iloc[0].get('condicoes_para_uso', '')
+    if st.button("💾 Atualizar Base com Parecer Técnico", type="primary"):
+        if not df_lab_sel.empty:
             novo_status = 'Baixado' if ("INSERVÍVEL" in resultado or "REPROVADO" in resultado) else 'Disponível'
-            
-            dados_update_lab = {
-                'condicoes_para_uso': resultado,
-                'status_sistema': novo_status,
-                'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-            }
-            if acessorios_lab.strip():
-                dados_update_lab['acessorios'] = acessorios_lab.strip()
-            
             try:
-                supabase.table('ativos_master').update(dados_update_lab).eq('patrimonio', pat_real).execute()
+                for _, r_l in df_lab_sel.iterrows():
+                    pat_real = str(r_l['patrimonio']).strip()
+                    cond_antiga = str(r_l.get('condicoes_para_uso', ''))
+                    dados_update_lab = {
+                        'condicoes_para_uso': resultado,
+                        'status_sistema': novo_status,
+                        'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                    }
+                    if acessorios_lab.strip():
+                        dados_update_lab['acessorios'] = acessorios_lab.strip()
+                    supabase.table('ativos_master').update(dados_update_lab).eq('patrimonio', pat_real).execute()
+                    registrar_log_auditoria("LAUDO LABORATÓRIO", pat_real, f"Parecer: '{cond_antiga}' -> '{resultado}'. Novo Status: '{novo_status}'.")
+                st.session_state["sel_excel_pats_lab_eqp_sel"] = set()
                 st.cache_data.clear()
-                registrar_log_auditoria("LAUDO LABORATÓRIO", pat_real, f"Parecer: '{cond_antiga}' -> '{resultado}'. Novo Status: '{novo_status}'.")
-                st.success(f"✅ Laudo registrado! Ativo atualizado para: {novo_status}")
+                st.success(f"✅ Laudo registrado para {len(df_lab_sel)} equipamento(s)! Status atualizado para: {novo_status}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao salvar laudo: {e}")
         else:
-            st.warning("⚠️ Patrimônio ou série não localizado.")
+            st.warning("⚠️ Marque pelo menos um equipamento na tabela acima.")
 
     exibir_marca_desenvolvedor()
 
-# ==========================================
 # ==========================================
 # MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE AUTOMÁTICO + FOLHA A4 PADRÃO PROCISA
 # ==========================================
@@ -778,48 +892,45 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
             resultados = buscar_ativo(cod_eqp_qr, df_ativos)
             if not resultados.empty:
                 st.success(f"✅ **{len(resultados)} equipamento(s)** localizado(s) para o código `{cod_eqp_bruto}`!")
-                cols_v = [c for c in ['patrimonio', 'item', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela', 'enderecamento_01', 'enderecamento_02'] if c in resultados.columns]
-                st.dataframe(resultados[cols_v], use_container_width=True, hide_index=True)
+                df_qr_sel = render_seletor_excel_equipamentos(resultados, "qr_sc_eqp_sel", multiplo=False, altura=180)
 
-                op_eq = resultados.apply(lambda r: f"{r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | End: {r.get('enderecamento_01','')} / {r.get('enderecamento_02','')}", axis=1).tolist()
-                sel_eq = st.selectbox("Selecione o Equipamento para Ação Rápida:", op_eq)
-                pat_sel = sel_eq.split(" | ")[0]
-                reg_eq = resultados[resultados['patrimonio'] == pat_sel].iloc[0].to_dict()
+                if not df_qr_sel.empty:
+                    reg_eq = df_qr_sel.iloc[0].to_dict()
+                    pat_sel = str(reg_eq['patrimonio']).strip()
 
-                with st.form("form_qr_eqp_mov"):
-                    ce1, ce2, ce3 = st.columns(3)
-                    with ce1:
-                        n_end1 = st.text_input("Bipar Novo LOCAL (Endereçamento 01):", value=reg_eq.get('enderecamento_01', ''))
-                        n_end2 = st.text_input("Bipar Novo Descri. Local (Endereçamento 02):", value=reg_eq.get('enderecamento_02', ''))
-                    with ce2:
-                        n_caut = st.text_input("Cautela / Localização:", value=reg_eq.get('cautela', 'ALMOXARIFADO CENTRAL'))
-                    with ce3:
-                        n_st = st.selectbox("Status:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
+                    with st.form("form_qr_eqp_mov"):
+                        ce1, ce2, ce3 = st.columns(3)
+                        with ce1:
+                            n_end1 = st.text_input("Bipar Novo LOCAL (Endereçamento 01):", value=reg_eq.get('enderecamento_01', ''))
+                            n_end2 = st.text_input("Bipar Novo Descri. Local (Endereçamento 02):", value=reg_eq.get('enderecamento_02', ''))
+                        with ce2:
+                            n_caut = st.text_input("Cautela / Localização:", value=reg_eq.get('cautela', 'ALMOXARIFADO CENTRAL'))
+                        with ce3:
+                            n_st = st.selectbox("Status:", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
 
-                    if st.form_submit_button("🚀 Atualizar Endereçamento / Localização do Equipamento", type="primary"):
-                        supabase.table('ativos_master').update({
-                            'enderecamento_01': n_end1.strip().upper(),
-                            'enderecamento_02': n_end2.strip().upper(),
-                            'cautela': n_caut.strip(),
-                            'status_sistema': n_st,
-                            'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-                        }).eq('patrimonio', pat_sel).execute()
-                        registrar_log_auditoria("QR CODE EQUIPAMENTO", pat_sel, f"Endereçado para {n_end1.strip().upper()} / {n_end2.strip().upper()} ({n_caut.strip()})")
-                        st.cache_data.clear()
-                        st.success(f"✅ Equipamento `{pat_sel}` atualizado com sucesso!")
-                        st.rerun()
+                        if st.form_submit_button("🚀 Atualizar Endereçamento / Localização do Equipamento", type="primary"):
+                            supabase.table('ativos_master').update({
+                                'enderecamento_01': n_end1.strip().upper(),
+                                'enderecamento_02': n_end2.strip().upper(),
+                                'cautela': n_caut.strip(),
+                                'status_sistema': n_st,
+                                'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                            }).eq('patrimonio', pat_sel).execute()
+                            registrar_log_auditoria("QR CODE EQUIPAMENTO", pat_sel, f"Endereçado para {n_end1.strip().upper()} / {n_end2.strip().upper()} ({n_caut.strip()})")
+                            st.cache_data.clear()
+                            st.success(f"✅ Equipamento `{pat_sel}` atualizado com sucesso!")
+                            st.rerun()
             else:
                 st.warning(f"⚠️ Nenhum equipamento ou endereço localizado para `{cod_eqp_bruto}`.")
 
     with aba_etq_eqp:
         st.markdown("###### 🖨️ Impressão em Lote de Etiquetas Padronizadas PROCISA (Equipamentos - 8 por Folha A4)")
         if not df_ativos.empty and gerar_etiquetas_qrcode_pdf:
-            op_at = df_ativos.apply(lambda r: f"{r['patrimonio']} | Cód D365: {r.get('item','')} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | End: {r.get('enderecamento_01','')}", axis=1).tolist()
-            sel_at = st.multiselect("Selecione os Equipamentos para gerar etiquetas (8 por folha A4):", options=op_at, default=op_at[:8])
+            st.markdown("Filtre (Estilo Excel) e marque na tabela os equipamentos para gerar etiquetas:")
+            df_sel_etq_eqp = render_seletor_excel_equipamentos(df_ativos, "etq_lote_eqp_excel", multiplo=True, altura=220)
             etq_eqp_list = []
-            for item_a in sel_at:
-                pat_a = item_a.split(" | ")[0]
-                r_a = df_ativos[df_ativos['patrimonio'] == pat_a].iloc[0]
+            for _, r_a in df_sel_etq_eqp.iterrows():
+                pat_a = str(r_a['patrimonio']).strip()
                 cod_item_d365 = str(r_a.get('item', '')).strip()
                 e1_a = str(r_a.get('enderecamento_01', '')).strip()
                 e2_a = str(r_a.get('enderecamento_02', '')).strip()
