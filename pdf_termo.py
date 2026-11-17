@@ -62,7 +62,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     
     data_atual = datetime.now().strftime("%d/%m/%Y")
     
-    # --- PÁGINA 1: CLÁUSULAS CONTRATUAIS ---
     _desenhar_cabecalho_procisa(pdf, data_atual, 1)
     
     pdf.set_font("Arial", 'B', 12)
@@ -95,7 +94,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     pdf.cell(90, 5, txt=limpar_texto_pdf("USUÁRIO"), align='C')
     pdf.cell(90, 5, txt=limpar_texto_pdf("COORDENADOR/RESPONSÁVEL"), ln=True, align='C')
     
-    # --- PÁGINA 2 (E SEGUINTES, SE HOUVER MUITAS FERRAMENTAS) ---
     num_pagina_atual = 2
     pdf.add_page()
     _desenhar_cabecalho_procisa(pdf, data_atual, num_pagina_atual)
@@ -183,14 +181,13 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
 def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
     """
     Gera folha A4 com 8 etiquetas padronizadas PROCISA (2 colunas x 4 linhas):
-    - Cabeçalho PROCISA + QR Code integrado no canto direito
-    - ITEM D365 (Faixa preta com texto branco) [Item AX2009 eliminado]
-    - REF. INTERNA (Faixa preta com texto branco)
-    - DESCRIÇÃO DO ITEM (Faixa central destacada)
-    - PLACA DE LICENÇA (Em branco para uso futuro)
-    - LOCAL (Endereçamento 01) | Descri. Local (Endereçamento 02)
-    - QUANT. (Quantidade do item) | DATA (Data de criação/entrada)
-    - OBS: | LOTE
+    - ITEM D365: Exclusivamente o código do item no D365 (NUNCA o ID FER)
+    - REF. INTERNA: O ID de controle interno (FER-xxxxxx ou Patrimônio)
+    - DESCRIÇÃO: Nome da ferramenta / equipamento
+    - PLACA DE LICENÇA: Em branco para uso futuro
+    - LOCAL: Endereçamento 01 | Descri. Local: Endereçamento 02
+    - QUANT.: Quantidade do item | DATA: Data de criação
+    - QR CODE: Codifica Item D365 + Ferramenta + Localização (End 01 e 02)
     """
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     pdf.set_auto_page_break(auto=False)
@@ -222,20 +219,38 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         x = margin_x + c_idx * (box_w + gap_x)
         y = margin_y + r_idx * (box_h + gap_y)
 
-        # Extração e mapeamento inteligente dos dados (compatível com dicionários novos e antigos)
-        codigo_qr = str(item.get('codigo_qr') or item.get('ref_interna') or item.get('codigo') or '').strip().upper()
-        item_d365 = str(item.get('item_d365') or item.get('codigo_d365') or item.get('codigo') or '').strip().upper()
+        # 1. Separação estrita entre ITEM D365 e REF. INTERNA (sem misturar ID FER no campo D365)
+        item_d365 = str(item.get('item_d365') or item.get('codigo_d365') or '').strip().upper()
         ref_interna = str(item.get('ref_interna') or item.get('id_controle') or item.get('codigo') or '').strip().upper()
+
+        # Compatibilidade caso ainda venha do formato antigo ('tipo': 'D365: 146 | US-AC1N1P9')
+        tipo_legado = str(item.get('tipo', '')).strip()
+        if not item_d365 and "D365:" in tipo_legado.upper():
+            partes_t = tipo_legado.split("|")
+            item_d365 = partes_t[0].upper().replace("D365:", "").strip()
+
         descricao = str(item.get('descricao') or item.get('subtitulo') or '').strip().upper()
-        placa_licenca = str(item.get('placa_licenca', '')).strip().upper()  # Em branco por padrão para uso futuro
+        placa_licenca = str(item.get('placa_licenca', '')).strip().upper()
         local_end1 = str(item.get('local') or item.get('enderecamento_01') or '').strip().upper()
         desc_local_end2 = str(item.get('descri_local') or item.get('enderecamento_02') or '').strip().upper()
+
+        if not local_end1 and "|" in tipo_legado:
+            local_end1 = tipo_legado.split("|")[1].strip().upper()
+
         quantidade = str(item.get('quantidade', '1')).strip()
         data_criacao = formatar_data_br(item.get('data_criacao') or item.get('data_entrada') or '')
-        obs_txt = str(item.get('obs', '0')).strip()
-        if not obs_txt:
-            obs_txt = "0"
-        lote_txt = str(item.get('lote') or ref_interna).strip().upper()
+        obs_txt = str(item.get('obs', '0')).strip() or "0"
+        lote_txt = str(item.get('lote') or '').strip().upper()
+
+        # 2. Construção do QR Code referenciando ITEM D365 + FERRAMENTA + LOCALIZAÇÃO (Endereçamento 01 e 02)
+        payload_qr = str(item.get('codigo_qr', '')).strip()
+        if not payload_qr:
+            end_combinado = f"{local_end1}/{desc_local_end2}".strip("/")
+            payload_qr = f"D365:{item_d365}|FER:{ref_interna}|LOC:{end_combinado}|DESC:{descricao[:25]}"
+
+        legenda_abaixo_qr = f"D365:{item_d365}" if item_d365 else ref_interna
+        if local_end1:
+            legenda_abaixo_qr = f"{legenda_abaixo_qr} | {local_end1}"
 
         # Moldura externa da etiqueta
         pdf.set_draw_color(0, 0, 0)
@@ -246,7 +261,7 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         # 1. FAIXA DE TOPO: LOGO PROCISA + QR CODE NO CANTO DIREITO
         # ---------------------------------------------------------
         h_logo = 11.0
-        w_qr_col = 20.0
+        w_qr_col = 21.0
         w_esq = box_w - w_qr_col
 
         pdf.set_xy(x, y + 2.0)
@@ -255,12 +270,11 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         pdf.cell(w_esq, 7.0, txt=limpar_texto_pdf("PROCISA"), align='C')
         pdf.set_text_color(0, 0, 0)
 
-        # Caixa reservada para o QR Code (canto superior direito: ocupa altura do topo + ITEM D365 + REF INTERNA = 25mm)
         h_bloco_sup = h_logo + 7.0 + 7.0
         pdf.rect(x + w_esq, y, w_qr_col, h_bloco_sup)
-        if codigo_qr:
+        if payload_qr:
             try:
-                url_qr = f"https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=1&data={urllib.parse.quote(codigo_qr)}"
+                url_qr = f"https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=1&data={urllib.parse.quote(payload_qr)}"
                 req = urllib.request.Request(url_qr, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     img_bytes = resp.read()
@@ -268,17 +282,17 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
                 tmp_img.write(img_bytes)
                 tmp_img.close()
                 arquivos_temp.append(tmp_img.name)
-                pdf.image(tmp_img.name, x=x + w_esq + 1.0, y=y + 1.5, w=18.0, h=18.0)
-                pdf.set_xy(x + w_esq, y + 20.2)
-                pdf.set_font("Arial", 'B', 5.5)
-                pdf.cell(w_qr_col, 3.5, txt=limpar_texto_pdf(codigo_qr[:14]), align='C')
+                pdf.image(tmp_img.name, x=x + w_esq + 1.5, y=y + 1.2, w=18.0, h=18.0)
+                pdf.set_xy(x + w_esq + 0.5, y + 19.8)
+                pdf.set_font("Arial", 'B', 4.8)
+                pdf.cell(w_qr_col - 1.0, 4.0, txt=limpar_texto_pdf(legenda_abaixo_qr[:18]), align='C')
             except Exception:
                 pdf.set_xy(x + w_esq + 1.0, y + 10.0)
                 pdf.set_font("Arial", 'B', 6)
-                pdf.cell(18.0, 5.0, txt="[QR CODE]", align='C')
+                pdf.cell(w_qr_col - 2.0, 5.0, txt="[QR CODE]", align='C')
 
         # ---------------------------------------------------------
-        # 2. LINHA: ITEM D365 (RÓTULO BRANCO + VALOR EM FUNDO PRETO)
+        # 2. LINHA: ITEM D365 (RÓTULO BRANCO + CÓDIGO D365 EM FUNDO PRETO)
         # ---------------------------------------------------------
         y_d365 = y + h_logo
         h_row_sup = 7.0
@@ -298,7 +312,7 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         pdf.cell(w_val_sup, h_row_sup, txt=limpar_texto_pdf(item_d365[:20]), border=1, align='C', fill=True)
 
         # ---------------------------------------------------------
-        # 3. LINHA: REF. INTERNA (RÓTULO BRANCO + VALOR EM FUNDO PRETO)
+        # 3. LINHA: REF. INTERNA (RÓTULO BRANCO + ID FER/PATRIMÔNIO EM FUNDO PRETO)
         # ---------------------------------------------------------
         y_ref = y_d365 + h_row_sup
         pdf.set_xy(x, y_ref)
@@ -313,7 +327,6 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         pdf.set_font("Arial", 'B', 11)
         pdf.cell(w_val_sup, h_row_sup, txt=limpar_texto_pdf(ref_interna[:20]), border=1, align='C', fill=True)
 
-        # Restaura cor preta padrão para as próximas linhas
         pdf.set_text_color(0, 0, 0)
         pdf.set_fill_color(255, 255, 255)
 
@@ -323,7 +336,7 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         y_desc = y_ref + h_row_sup
         h_desc = 9.0
         pdf.rect(x, y_desc, box_w, h_desc)
-        tam_f_desc = 10.5 if len(descricao) <= 32 else (8.8 if len(descricao) <= 45 else 7.5)
+        tam_f_desc = 10.0 if len(descricao) <= 32 else (8.5 if len(descricao) <= 45 else 7.2)
         pdf.set_font("Arial", 'B', tam_f_desc)
         pdf.set_xy(x + 1.0, y_desc + 1.8)
         pdf.cell(box_w - 2.0, h_desc - 3.6, txt=limpar_texto_pdf(descricao[:55]), align='C')
@@ -350,9 +363,9 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         # ---------------------------------------------------------
         y_loc = y_placa + h_placa
         h_loc = 8.5
-        w_c1 = 17.0
-        w_c2 = 27.0
-        w_c3 = 19.0
+        w_c1 = 16.0
+        w_c2 = 28.0
+        w_c3 = 18.0
         w_c4 = box_w - (w_c1 + w_c2 + w_c3)
 
         pdf.set_xy(x, y_loc)
@@ -360,18 +373,18 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         pdf.cell(w_c1, h_loc, txt=limpar_texto_pdf("LOCAL"), border=1, align='L')
 
         pdf.set_xy(x + w_c1, y_loc)
-        tam_f_e1 = 8.5 if len(local_end1) <= 11 else 7.0
+        tam_f_e1 = 8.2 if len(local_end1) <= 12 else 6.8
         pdf.set_font("Arial", 'B', tam_f_e1)
-        pdf.cell(w_c2, h_loc, txt=limpar_texto_pdf(local_end1[:16]), border=1, align='C')
+        pdf.cell(w_c2, h_loc, txt=limpar_texto_pdf(local_end1[:18]), border=1, align='C')
 
         pdf.set_xy(x + w_c1 + w_c2, y_loc)
-        pdf.set_font("Arial", 'B', 7.2)
+        pdf.set_font("Arial", 'B', 7.0)
         pdf.cell(w_c3, h_loc, txt=limpar_texto_pdf("Descri. Local"), border=1, align='C')
 
         pdf.set_xy(x + w_c1 + w_c2 + w_c3, y_loc)
-        tam_f_e2 = 7.5 if len(desc_local_end2) <= 14 else 6.5
+        tam_f_e2 = 7.5 if len(desc_local_end2) <= 14 else 6.2
         pdf.set_font("Arial", 'B', tam_f_e2)
-        pdf.cell(w_c4, h_loc, txt=limpar_texto_pdf(desc_local_end2[:20]), border=1, align='C')
+        pdf.cell(w_c4, h_loc, txt=limpar_texto_pdf(desc_local_end2[:22]), border=1, align='C')
 
         # ---------------------------------------------------------
         # 7. LINHA: QUANT. (Quantidade) | DATA (Data de Criação)
@@ -412,7 +425,7 @@ def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
         pdf.cell(w_c3, h_obs, txt=limpar_texto_pdf("LOTE"), border=1, align='C')
 
         pdf.set_xy(x + w_c1 + w_c2 + w_c3, y_obs)
-        pdf.set_font("Arial", 'B', 9.5)
+        pdf.set_font("Arial", 'B', 9)
         pdf.cell(w_c4, h_obs, txt=limpar_texto_pdf(lote_txt[:16]), border=1, align='C')
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
