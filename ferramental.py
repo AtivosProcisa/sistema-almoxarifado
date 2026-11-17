@@ -125,6 +125,271 @@ def update_cols_fer():
         st.session_state.saved_cols_fer
     )
 
+# ==========================================
+# SELETOR ESTILO FILTRO DO EXCEL (BUSCA ESPECÍFICA + TABELA COM CHECKBOX)
+# ==========================================
+def render_seletor_excel_ferramentas(df_fonte, chave_unica, multiplo=True, altura=230):
+    """
+    Substitui o st.multiselect tradicional por um filtro estilo Excel:
+    - Escolha da coluna específica (Cód D365 Exato, ID FER Exato, Descrição, Endereço ou Todos)
+    - Opção de Busca Exata (para que digitar '146' traga apenas o código 146 e não 1460)
+    - Tabela interativa com caixinha [✓] que preserva os itens marcados mesmo ao trocar o termo de busca.
+    """
+    state_sel = f"sel_excel_ids_{chave_unica}"
+    if state_sel not in st.session_state:
+        st.session_state[state_sel] = set()
+
+    if df_fonte.empty:
+        st.warning("Nenhum item disponível para seleção.")
+        return pd.DataFrame()
+
+    c_f1, c_f2, c_f3, c_f4 = st.columns([1.4, 2.2, 0.9, 0.7])
+    with c_f1:
+        col_alvo = st.selectbox(
+            "Filtrar Coluna:",
+            ["Código D365", "Descrição / Nome", "ID FER (Controle)", "Endereçamento 01/02", "Todos os Campos"],
+            key=f"col_ex_{chave_unica}",
+            label_visibility="collapsed"
+        )
+    with c_f3:
+        padrao_exato = True if col_alvo in ["Código D365", "ID FER (Controle)"] else False
+        modo_exato = st.checkbox("🎯 Busca Exata", value=padrao_exato, key=f"exato_{chave_unica}", help="Quando marcado, digitar '146' traz apenas o item de código exatamente igual a '146'.")
+    with c_f2:
+        termo_b = st.text_input(
+            "Digite para filtrar:",
+            placeholder="🔍 Digite códigos (separe por vírgula p/ vários) ou texto...",
+            key=f"txt_ex_{chave_unica}",
+            label_visibility="collapsed"
+        )
+    with c_f4:
+        if st.button(f"🧹 Limpar ({len(st.session_state[state_sel])})", key=f"clr_ex_{chave_unica}", use_container_width=True):
+            st.session_state[state_sel] = set()
+            st.rerun()
+
+    df_view = df_fonte.copy()
+    if termo_b.strip():
+        termos_lista = [t.strip().upper() for t in termo_b.replace(";", ",").split(",") if t.strip()]
+        mask_total = pd.Series(False, index=df_view.index)
+
+        for t_item in termos_lista:
+            if col_alvo == "Código D365":
+                s_col = df_view['codigo_d365'].fillna("").astype(str).str.strip().str.upper()
+            elif col_alvo == "ID FER (Controle)":
+                s_col = df_view['id_controle'].fillna("").astype(str).str.strip().str.upper()
+            elif col_alvo == "Descrição / Nome":
+                s_col = (df_view['descricao_d365'].fillna("").astype(str) + " " + df_view['descricao_ferramenta'].fillna("").astype(str)).str.upper()
+            elif col_alvo == "Endereçamento 01/02":
+                s_col = (df_view['enderecamento_01'].fillna("").astype(str) + " " + df_view['enderecamento_02'].fillna("").astype(str)).str.upper()
+            else:
+                s_col = (
+                    df_view['codigo_d365'].fillna("").astype(str) + " " +
+                    df_view['id_controle'].fillna("").astype(str) + " " +
+                    df_view['descricao_d365'].fillna("").astype(str) + " " +
+                    df_view['descricao_ferramenta'].fillna("").astype(str) + " " +
+                    df_view['enderecamento_01'].fillna("").astype(str)
+                ).str.upper()
+
+            if modo_exato and col_alvo in ["Código D365", "ID FER (Controle)"]:
+                mask_total = mask_total | (s_col == t_item)
+            elif modo_exato:
+                mask_total = mask_total | s_col.str.split().apply(lambda palavras: t_item in palavras)
+            else:
+                mask_total = mask_total | s_col.str.contains(t_item, regex=False, na=False)
+
+        # Mantém visíveis tanto os resultados da busca atual quanto os itens que o usuário já marcou antes
+        mask_ja_marcados = df_view['id_controle'].isin(st.session_state[state_sel])
+        df_view = df_view[mask_total | mask_ja_marcados].copy()
+
+    df_grid = pd.DataFrame({
+        'Selecionar': df_view['id_controle'].isin(st.session_state[state_sel]),
+        'Cód D365': df_view['codigo_d365'].astype(str),
+        'Descrição D365': df_view['descricao_d365'].astype(str),
+        'Nome / Pesquisa': df_view['descricao_ferramenta'].astype(str),
+        'Saldo': df_view['quantidade'].astype(str),
+        'Endereço 01': df_view['enderecamento_01'].astype(str),
+        'Endereço 02': df_view['enderecamento_02'].astype(str),
+        'Condição': df_view['condicao_fisica'].astype(str),
+        'ID FER': df_view['id_controle'].astype(str)
+    })
+
+    # Ordena colocando os já selecionados no topo da grade
+    df_grid = df_grid.sort_values(by=['Selecionar', 'Cód D365'], ascending=[False, True]).reset_index(drop=True)
+
+    editado = st.data_editor(
+        df_grid,
+        hide_index=True,
+        use_container_width=True,
+        height=altura,
+        disabled=['Cód D365', 'Descrição D365', 'Nome / Pesquisa', 'Saldo', 'Endereço 01', 'Endereço 02', 'Condição', 'ID FER'],
+        column_config={
+            'Selecionar': st.column_config.CheckboxColumn("☑️ Selecionar", default=False, width="small"),
+            'Cód D365': st.column_config.TextColumn("Cód D365", width="small"),
+            'Saldo': st.column_config.TextColumn("Saldo", width="small")
+        },
+        key=f"grid_ex_{chave_unica}"
+    )
+
+    ids_visiveis = set(df_grid['ID FER'].tolist())
+    ids_marcados_agora = set(editado[editado['Selecionar'] == True]['ID FER'].tolist())
+
+    if not multiplo and len(ids_marcados_agora) > 1:
+        # Se for seleção única, mantém apenas o último clicado
+        novos_clicados = list(ids_marcados_agora - st.session_state[state_sel])
+        id_manter = novos_clicados[0] if novos_clicados else list(ids_marcados_agora)[0]
+        st.session_state[state_sel] = {id_manter}
+        st.rerun()
+    else:
+        st.session_state[state_sel] = (st.session_state[state_sel] - ids_visiveis) | ids_marcados_agora
+
+    df_selecionados_final = df_fonte[df_fonte['id_controle'].isin(st.session_state[state_sel])].copy()
+    if not df_selecionados_final.empty:
+        resumo_sel = ", ".join([f"Cód {r['codigo_d365']} ({r['id_controle']})" for _, r in df_selecionados_final.iterrows()])
+        st.caption(f"✅ **{len(df_selecionados_final)} item(ns) marcado(s):** {resumo_sel}")
+    return df_selecionados_final
+
+# ==========================================
+# F0: DASHBOARD EXECUTIVO - VISÃO GERAL (7 PERGUNTAS DE GESTÃO)
+# ==========================================
+def render_dashboard_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer):
+    st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+    st.subheader("📊 Dashboard Executivo — Visão Geral do Ferramental")
+    st.caption("Respostas rápidas de diagnóstico gerencial sobre volume, disponibilidade, localização, composição, inoperância, integridade cadastral e ações imediatas.")
+
+    if df_fer.empty:
+        st.info("Nenhuma ferramenta cadastrada na base para gerar indicadores.")
+        exibir_marca_desenvolvedor()
+        return
+
+    qtd_s = df_fer['quantidade'].apply(lambda x: _parse_int(x, 1))
+    st_s = df_fer['status_operacional'].astype(str).str.upper().str.strip()
+    cd_s = df_fer['condicao_fisica'].astype(str).str.upper().str.strip()
+    dias_s = df_fer['dias_sem_movimentacao'].apply(lambda x: _parse_int(x, 0))
+    mask_ativos = ~st_s.isin(['BAIXADO', 'TRANSFERIDO'])
+
+    # 1 & 2. Quantos existem, disponíveis, em uso ou indisponíveis?
+    total_pecas = int(qtd_s[mask_ativos].sum())
+    total_lotes = int(mask_ativos.sum())
+    qtd_disp = int(qtd_s[(st_s == 'DISPONÍVEL') & (cd_s.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))].sum())
+    qtd_uso = int(qtd_s[st_s == 'EM CAUTELA'].sum())
+    mask_indisp = mask_ativos & (~((st_s == 'DISPONÍVEL') & (cd_s.isin(['NOVO', 'USADO - BOM', 'USADO - REGULAR']))) & (st_s != 'EM CAUTELA'))
+    qtd_indisp = int(qtd_s[mask_indisp].sum())
+
+    # 5. Manutenção, inoperantes ou sem movimentação (>90d)
+    qtd_manut_insp = int(qtd_s[(st_s.isin(['EM MANUTENÇÃO', 'EM INSPEÇÃO'])) | (cd_s.isin(['EM MANUTENÇÃO', 'EM INSPEÇÃO']))].sum())
+    qtd_inoperantes = int(qtd_s[(st_s.isin(['BLOQUEADO', 'AGUARDANDO DESCARTE', 'AGUARDANDO DECISÃO'])) | (cd_s.isin(['COM DEFEITO', 'OBSOLETO', 'DESCARTE', 'SEGREGADO']))].sum())
+    qtd_sem_mov = int(qtd_s[(dias_s > 90) & mask_ativos].sum())
+
+    st.markdown("##### 1️⃣ & 2️⃣ Quantos itens existem e qual a disponibilidade atual?")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📦 Total no Parque (Peças)", f"{total_pecas}", f"{total_lotes} lotes registrados")
+    k2.metric("🟢 Disponíveis p/ Entrega", f"{qtd_disp}", f"{(qtd_disp/max(1,total_pecas))*100:.1f}% do parque")
+    k3.metric("🔵 Em Uso (Em Cautela)", f"{qtd_uso}", f"{(qtd_uso/max(1,total_pecas))*100:.1f}% do parque")
+    k4.metric("🔴 Indisponíveis (Triagem/Oficina/Bloq.)", f"{qtd_indisp}", f"{(qtd_indisp/max(1,total_pecas))*100:.1f}% do parque")
+
+    st.markdown("##### 5️⃣ Quantos estão em manutenção, inoperantes ou sem movimentação?")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("🟠 Em Manutenção / Inspeção", f"{qtd_manut_insp} un")
+    m2.metric("⛔ Inoperantes (Defeito / Segregado / Obsoleto)", f"{qtd_inoperantes} un")
+    m3.metric("⏳ Sem Movimentação (> 90 Dias)", f"{qtd_sem_mov} un")
+
+    st.divider()
+
+    # 3 & 4. Onde estão localizados e quais tipos representam a maior parte do parque?
+    col_loc, col_tipo = st.columns(2)
+    df_ativos_parque = df_fer[mask_ativos].copy()
+    df_ativos_parque['qtd_num'] = qtd_s[mask_ativos]
+
+    with col_loc:
+        st.markdown("##### 3️⃣ Onde as ferramentas estão localizadas?")
+        df_ativos_parque['local_consolidado'] = df_ativos_parque.apply(
+            lambda r: f"{r.get('localizacao','N/I')} | {r.get('enderecamento_01') or 'Sem End. 01'}", axis=1
+        )
+        resumo_loc = df_ativos_parque.groupby('local_consolidado', as_index=False).agg(
+            Lotes=('id_controle', 'count'),
+            Quantidade_Pecas=('qtd_num', 'sum')
+        ).sort_values(by='Quantidade_Pecas', ascending=False)
+        resumo_loc['% Parque'] = (resumo_loc['Quantidade_Pecas'] / max(1, total_pecas) * 100).round(1).astype(str) + '%'
+        st.dataframe(resumo_loc, use_container_width=True, hide_index=True, height=250)
+
+    with col_tipo:
+        st.markdown("##### 4️⃣ Quais tipos representam a maior parte do parque?")
+        df_ativos_parque['tipo_familia'] = df_ativos_parque.apply(
+            lambda r: str(r.get('descricao_d365') or r.get('descricao_ferramenta') or r.get('categoria') or 'NÃO ESPECIFICADO').strip(), axis=1
+        )
+        resumo_tipo = df_ativos_parque.groupby(['codigo_d365', 'tipo_familia'], as_index=False).agg(
+            Lotes=('id_controle', 'count'),
+            Quantidade_Pecas=('qtd_num', 'sum')
+        ).sort_values(by='Quantidade_Pecas', ascending=False)
+        resumo_tipo['% Parque'] = (resumo_tipo['Quantidade_Pecas'] / max(1, total_pecas) * 100).round(1).astype(str) + '%'
+        st.dataframe(resumo_tipo.head(15), use_container_width=True, hide_index=True, height=250)
+
+    st.divider()
+
+    # 6 & 7. Qualidade de Cadastro e Situações que precisam de tratamento imediato
+    col_inc, col_urg = st.columns(2)
+    with col_inc:
+        st.markdown("##### 6️⃣ Existem itens sem responsável, localização ou código/série?")
+        sem_resp = df_ativos_parque[df_ativos_parque['responsavel_atual'].astype(str).str.strip() == '']
+        sem_end = df_ativos_parque[(df_ativos_parque['enderecamento_01'].astype(str).str.strip() == '') & (df_ativos_parque['status_operacional'] == 'DISPONÍVEL')]
+        sem_cod = df_ativos_parque[df_ativos_parque['codigo_d365'].astype(str).str.strip() == '']
+
+        ic1, ic2, ic3 = st.columns(3)
+        ic1.metric("👤 Sem Responsável", len(sem_resp))
+        ic2.metric("📍 Disponível s/ Endereço 01", len(sem_end))
+        ic3.metric("🏷️ Sem Código D365", len(sem_cod))
+
+        df_incompletos = pd.concat([sem_resp, sem_end, sem_cod]).drop_duplicates(subset=['id_controle'])
+        if not df_incompletos.empty:
+            st.dataframe(
+                df_incompletos[['id_controle', 'codigo_d365', 'descricao_d365', 'quantidade', 'enderecamento_01', 'responsavel_atual']],
+                use_container_width=True, hide_index=True, height=190
+            )
+        else:
+            st.success("✅ Todos os itens ativos possuem responsável, endereço e código preenchidos!")
+
+    with col_urg:
+        st.markdown("##### 7️⃣ Quais situações precisam de tratamento imediato?")
+        hoje_str = datetime.now().strftime('%Y-%m-%d')
+        cautelas_vencidas = pd.DataFrame()
+        if not df_caut_fer.empty:
+            cautelas_ativas = df_caut_fer[df_caut_fer['status'] == 'EM CAUTELA']
+            cautelas_vencidas = cautelas_ativas[(cautelas_ativas['data_prevista_devolucao'].astype(str) != '') & (cautelas_ativas['data_prevista_devolucao'].astype(str) < hoje_str)]
+
+        fila_triagem = df_ativos_parque[
+            df_ativos_parque['status_operacional'].isin(['EM INSPEÇÃO', 'BLOQUEADO', 'AGUARDANDO DECISÃO', 'AGUARDANDO DESCARTE']) |
+            df_ativos_parque['condicao_fisica'].isin(['COM DEFEITO', 'EM INSPEÇÃO'])
+        ]
+
+        u1, u2 = st.columns(2)
+        u1.metric("🚨 Cautelas Vencidas", len(cautelas_vencidas))
+        u2.metric("⚠️ Pendentes Triagem / Bloqueados", len(fila_triagem))
+
+        alertas_urgentes = []
+        for _, rc in cautelas_vencidas.iterrows():
+            alertas_urgentes.append({
+                'Prioridade': '🚨 CAUTELA VENCIDA',
+                'ID / Alvo': rc.get('id_fer', ''),
+                'Detalhe': f"Colaborador: {rc.get('colaborador','')} | Previsto: {rc.get('data_prevista_devolucao','')}",
+                'Ação Imediata': 'Cobrar devolução ou renovar cautela'
+            })
+        for _, rf in fila_triagem.iterrows():
+            alertas_urgentes.append({
+                'Prioridade': '⚠️ TRIAGEM / BLOQUEIO',
+                'ID / Alvo': rf.get('id_controle', ''),
+                'Detalhe': f"{rf.get('descricao_d365') or rf.get('descricao_ferramenta')} ({rf.get('status_operacional')})",
+                'Ação Imediata': 'Inspecionar, reparar ou baixar'
+            })
+
+        if alertas_urgentes:
+            st.dataframe(pd.DataFrame(alertas_urgentes), use_container_width=True, hide_index=True, height=190)
+        else:
+            st.success("🎉 Nenhuma pendência crítica ou cautela atrasada no momento!")
+
+    exibir_marca_desenvolvedor()
+
+# ==========================================
+# FUNÇÃO AUXILIAR DE MOVIMENTAÇÃO DE QUANTIDADE
+# ==========================================
 def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status, nova_condicao, nova_loc, novo_resp, novo_mat="", novo_proj="", novo_coord="", dt_entrega="", dt_devolucao="", obs_extra="", novo_end1=None, novo_end2=None, proximo_num_livre=None):
     reg_orig = df_fer[df_fer['id_controle'] == id_origem].iloc[0].to_dict()
     qtd_atual = _parse_int(reg_orig.get('quantidade', '1'), 1)
@@ -228,7 +493,7 @@ def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status,
             return id_origem, num_seq
 
 # ==========================================
-# F1: PAINEL GERENCIAL
+# F1: PAINEL OPERACIONAL DE FERRAMENTAS
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -236,7 +501,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         st.session_state.saved_cols_fer = prefs.get('fer', list(COLUNAS_FERRAMENTAS))
 
     st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-    st.subheader("🛠️ Controle Gerencial de Ferramentas Usadas")
+    st.subheader("🛠️ Painel Operacional — Ferramentas Usadas / Reutilizáveis")
 
     abas_principais = [
         "📋 Estoque Segmentado por Status",
@@ -250,14 +515,18 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     tabs = st.tabs(abas_principais)
 
     with tabs[0]:
-        cf1, cf2, cf3, cf4 = st.columns([2.2, 1.1, 1.1, 0.7])
+        cf0, cf1, cf_ex, cf2, cf3, cf4 = st.columns([1.2, 1.8, 0.7, 1.0, 1.0, 0.6])
+        with cf0:
+            col_filtro_p = st.selectbox("Campo:", ["Todos os Campos", "Código D365", "Descrição / Nome", "ID FER", "Endereçamento 01/02"], label_visibility="collapsed", key="fp_col_fer")
         with cf1:
-            fil_txt = st.text_input("🔍 Buscar:", label_visibility="collapsed", placeholder="🔍 Buscar Cód D365, Descrição, ID FER, Endereço 01/02 ou Responsável...")
+            fil_txt = st.text_input("🔍 Buscar:", label_visibility="collapsed", placeholder="🔍 Digite Código, Nome ou ID...")
+        with cf_ex:
+            fil_exato = st.checkbox("🎯 Exato", value=(col_filtro_p in ["Código D365", "ID FER"]), help="Busca exatamente o número/texto digitado.")
         with cf2:
             ends_01 = sorted([e for e in df_fer['enderecamento_01'].unique().tolist() if str(e).strip()]) if not df_fer.empty else []
-            fil_end1 = st.selectbox("Endereçamento 01:", ["Todos Endereços 01"] + ends_01, label_visibility="collapsed")
+            fil_end1 = st.selectbox("Endereçamento 01:", ["Todos End. 01"] + ends_01, label_visibility="collapsed")
         with cf3:
-            fil_loc = st.selectbox("Localização:", ["Todas Localizações"] + LISTA_LOCALIZACOES_FER, label_visibility="collapsed")
+            fil_loc = st.selectbox("Localização:", ["Todas Locais"] + LISTA_LOCALIZACOES_FER, label_visibility="collapsed")
         with cf4:
             with st.popover("👁️ Colunas", use_container_width=True):
                 st.caption("Selecione as colunas visíveis:")
@@ -285,14 +554,29 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 
         if not df_fer.empty:
             df_base = df_fer.copy()
-            if fil_loc != "Todas Localizações":
+            if fil_loc != "Todas Locais":
                 df_base = df_base[df_base['localizacao'] == fil_loc]
-            if fil_end1 != "Todos Endereços 01":
+            if fil_end1 != "Todos End. 01":
                 df_base = df_base[df_base['enderecamento_01'] == fil_end1]
             if fil_txt.strip():
-                termo = fil_txt.strip().lower()
-                mask_t = df_base.astype(str).apply(lambda x: x.str.lower().str.contains(termo, na=False)).any(axis=1)
-                df_base = df_base[mask_t]
+                t_up = fil_txt.strip().upper()
+                if col_filtro_p == "Código D365":
+                    s_alvo = df_base['codigo_d365'].astype(str).str.strip().str.upper()
+                elif col_filtro_p == "ID FER":
+                    s_alvo = df_base['id_controle'].astype(str).str.strip().str.upper()
+                elif col_filtro_p == "Descrição / Nome":
+                    s_alvo = (df_base['descricao_d365'].astype(str) + " " + df_base['descricao_ferramenta'].astype(str)).str.upper()
+                elif col_filtro_p == "Endereçamento 01/02":
+                    s_alvo = (df_base['enderecamento_01'].astype(str) + " " + df_base['enderecamento_02'].astype(str)).str.upper()
+                else:
+                    s_alvo = df_base.astype(str).apply(lambda x: " ".join(x), axis=1).str.upper()
+
+                if fil_exato and col_filtro_p in ["Código D365", "ID FER"]:
+                    df_base = df_base[s_alvo == t_up]
+                elif fil_exato:
+                    df_base = df_base[s_alvo.str.split().apply(lambda w: t_up in w)]
+                else:
+                    df_base = df_base[s_alvo.str.contains(t_up, regex=False, na=False)]
 
             st_s = df_base['status_operacional'].astype(str).str.upper().str.strip()
             cd_s = df_base['condicao_fisica'].astype(str).str.upper().str.strip()
@@ -623,136 +907,129 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                 st.warning(f"⚠️ Nenhum endereço ou ferramenta encontrado com o código `{termo_qr}`.")
 
             if not df_encontrados.empty:
-                st.dataframe(
-                    df_encontrados[['id_controle', 'codigo_d365', 'descricao_d365', 'descricao_ferramenta', 'quantidade', 'status_operacional', 'enderecamento_01', 'enderecamento_02', 'responsavel_atual']],
-                    use_container_width=True, hide_index=True
-                )
+                st.markdown("##### ⚡ Marque na tabela o item localizado para executar a ação:")
+                df_sel_qr = render_seletor_excel_ferramentas(df_encontrados, "qr_op_sel", multiplo=False, altura=180)
 
-                st.markdown("##### ⚡ Executar Ação Rápida do Operador")
-                opcoes_lote_qr = df_encontrados.apply(
-                    lambda r: f"{r['id_controle']} | Cód: {r['codigo_d365']} - {r['descricao_d365'] or r['descricao_ferramenta']} | Saldo: {r['quantidade']} | End: {r['enderecamento_01']} / {r['enderecamento_02']}",
-                    axis=1
-                ).tolist()
-                sel_qr = st.selectbox("Selecione o item localizado:", opcoes_lote_qr)
-                id_sel_qr = sel_qr.split(" | ")[0]
-                reg_qr = df_encontrados[df_encontrados['id_controle'] == id_sel_qr].iloc[0].to_dict()
-                max_q_qr = _parse_int(reg_qr.get('quantidade', '1'), 1)
+                if not df_sel_qr.empty:
+                    reg_qr = df_sel_qr.iloc[0].to_dict()
+                    id_sel_qr = reg_qr['id_controle']
+                    max_q_qr = _parse_int(reg_qr.get('quantidade', '1'), 1)
 
-                tipo_acao_op = st.radio(
-                    "Operação:",
-                    [
-                        "📦 1. Movimentação Interna de Endereço (Trocar Prateleira / Caixa por Bipe)",
-                        "👷 2. Liberação Rápida / Entrega para Colaborador (Cautela)"
-                    ],
-                    horizontal=True
-                )
+                    tipo_acao_op = st.radio(
+                        "Operação:",
+                        [
+                            "📦 1. Movimentação Interna de Endereço (Trocar Prateleira / Caixa por Bipe)",
+                            "👷 2. Liberação Rápida / Entrega para Colaborador (Cautela)"
+                        ],
+                        horizontal=True
+                    )
 
-                if tipo_acao_op.startswith("📦"):
-                    with st.form("form_qr_mov_interna"):
-                        cq1, cq2, cq3, cq4 = st.columns(4)
-                        with cq1:
-                            qtd_m_qr = st.number_input(f"Qtd a Transferir (Máx: {max_q_qr})", min_value=1, max_value=max_q_qr, value=max_q_qr)
-                        with cq2:
-                            novo_e1 = st.text_input("Bipar Novo Endereçamento 01:", value=reg_qr.get('enderecamento_01', ''))
-                        with cq3:
-                            novo_e2 = st.text_input("Bipar Novo Endereçamento 02:", value=reg_qr.get('enderecamento_02', ''))
-                        with cq4:
-                            nova_loc_qr = st.selectbox("Zona Operacional:", LISTA_LOCALIZACOES_FER, index=LISTA_LOCALIZACOES_FER.index(reg_qr['localizacao']) if reg_qr.get('localizacao') in LISTA_LOCALIZACOES_FER else 0)
+                    if tipo_acao_op.startswith("📦"):
+                        with st.form("form_qr_mov_interna"):
+                            cq1, cq2, cq3, cq4 = st.columns(4)
+                            with cq1:
+                                qtd_m_qr = st.number_input(f"Qtd a Transferir (Máx: {max_q_qr})", min_value=1, max_value=max_q_qr, value=max_q_qr)
+                            with cq2:
+                                novo_e1 = st.text_input("Bipar Novo Endereçamento 01:", value=reg_qr.get('enderecamento_01', ''))
+                            with cq3:
+                                novo_e2 = st.text_input("Bipar Novo Endereçamento 02:", value=reg_qr.get('enderecamento_02', ''))
+                            with cq4:
+                                nova_loc_qr = st.selectbox("Zona Operacional:", LISTA_LOCALIZACOES_FER, index=LISTA_LOCALIZACOES_FER.index(reg_qr['localizacao']) if reg_qr.get('localizacao') in LISTA_LOCALIZACOES_FER else 0)
 
-                        obs_qr = st.text_input("Observação (Opcional):")
-                        if st.form_submit_button("🚀 Confirmar Transferência de Endereço", type="primary"):
-                            id_dest_qr, _ = _executar_movimentacao_quantidade(
-                                df_fer, id_sel_qr, qtd_m_qr, reg_qr.get('status_operacional', 'DISPONÍVEL'),
-                                reg_qr.get('condicao_fisica', 'USADO - BOM'), nova_loc_qr,
-                                reg_qr.get('responsavel_atual', 'ALMOXARIFADO'),
-                                novo_end1=novo_e1.strip().upper(), novo_end2=novo_e2.strip().upper()
-                            )
-                            supabase.table('mov_ferramentas').insert({
-                                'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                                'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                'id_fer': id_dest_qr,
-                                'codigo_d365': reg_qr.get('codigo_d365', ''),
-                                'tipo_movimento': 'TRANSFERÊNCIA',
-                                'localizacao_origem': f"{reg_qr.get('enderecamento_01', '')} / {reg_qr.get('enderecamento_02', '')}",
-                                'localizacao_destino': f"{novo_e1.strip().upper()} / {novo_e2.strip().upper()}",
-                                'responsavel_origem': st.session_state.get('nome_real', 'Operador'),
-                                'responsavel_destino': 'ALMOXARIFADO',
-                                'projeto': reg_qr.get('projeto', ''),
-                                'quantidade': str(qtd_m_qr),
-                                'documento': 'QR-SCAN',
-                                'usuario_registro': st.session_state.get('nome_real', 'Operador'),
-                                'observacao': f"Reendereçamento via Modo Operador. {obs_qr.strip()}"
-                            }).execute()
-                            st.cache_data.clear()
-                            st.success(f"✅ {qtd_m_qr} un transferida(s) para `{novo_e1.strip().upper()}` / `{novo_e2.strip().upper()}`!")
-                            st.rerun()
-                else:
-                    mat_op = st.text_input("Bipe o Crachá ou Digite a Matrícula do Colaborador:")
-                    mat_op_limpa = limpar_texto_matricula(mat_op)
-                    emp_qr = {}
-                    if mat_op_limpa and not df_empregados.empty:
-                        m_eq = df_empregados[df_empregados['matricula'].astype(str) == mat_op_limpa]
-                        if not m_eq.empty:
-                            emp_qr = m_eq.iloc[0].fillna("").to_dict()
-                            st.info(f"👤 Colaborador: **{emp_qr.get('nome')}** | Projeto: {emp_qr.get('projeto')}")
-
-                    with st.form("form_qr_lib_cautela"):
-                        cl1, cl2, cl3 = st.columns(3)
-                        with cl1:
-                            qtd_lib_qr = st.number_input(f"Qtd a Liberar (Máx: {max_q_qr})", min_value=1, max_value=max_q_qr, value=1)
-                        with cl2:
-                            nome_col_qr = st.text_input("Nome do Colaborador *", value=emp_qr.get('nome', ''))
-                        with cl3:
-                            proj_col_qr = st.text_input("Projeto *", value=emp_qr.get('projeto', ''))
-
-                        if st.form_submit_button("🚀 Liberar Ferramenta para o Colaborador", type="primary"):
-                            if nome_col_qr.strip():
-                                hoje_s = datetime.now().strftime('%Y-%m-%d')
-                                stamp_q = datetime.now().strftime('%Y%m%d%H%M%S')
-                                id_caut_q = f"CAU-{stamp_q}-QR"
-                                id_ent_qr, _ = _executar_movimentacao_quantidade(
-                                    df_fer, id_sel_qr, qtd_lib_qr, "EM CAUTELA",
-                                    reg_qr.get('condicao_fisica', 'USADO - BOM'), "CAMPO / COLABORADOR",
-                                    nome_col_qr.strip(), novo_mat=mat_op_limpa, novo_proj=proj_col_qr.strip(),
-                                    novo_coord=emp_qr.get('unidade', ''), dt_entrega=hoje_s
+                            obs_qr = st.text_input("Observação (Opcional):")
+                            if st.form_submit_button("🚀 Confirmar Transferência de Endereço", type="primary"):
+                                id_dest_qr, _ = _executar_movimentacao_quantidade(
+                                    df_fer, id_sel_qr, qtd_m_qr, reg_qr.get('status_operacional', 'DISPONÍVEL'),
+                                    reg_qr.get('condicao_fisica', 'USADO - BOM'), nova_loc_qr,
+                                    reg_qr.get('responsavel_atual', 'ALMOXARIFADO'),
+                                    novo_end1=novo_e1.strip().upper(), novo_end2=novo_e2.strip().upper()
                                 )
-                                supabase.table('cautelas_ferramentas').insert({
-                                    'id_cautela': id_caut_q,
-                                    'id_fer': id_ent_qr,
-                                    'codigo_d365': reg_qr.get('codigo_d365', ''),
-                                    'colaborador': nome_col_qr.strip(),
-                                    'matricula': mat_op_limpa,
-                                    'projeto': proj_col_qr.strip(),
-                                    'coordenacao': emp_qr.get('unidade', ''),
-                                    'data_entrega': hoje_s,
-                                    'condicao_entrega': reg_qr.get('condicao_fisica', 'USADO - BOM'),
-                                    'data_prevista_devolucao': (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
-                                    'data_efetiva_devolucao': '',
-                                    'condicao_devolucao': '',
-                                    'status': 'EM CAUTELA',
-                                    'observacao': f"[TRM-QR-{stamp_q}] Qtd: {qtd_lib_qr} (Liberado via Modo Operador)"
-                                }).execute()
                                 supabase.table('mov_ferramentas').insert({
-                                    'id_movimento': f"MVF-{stamp_q}-QR",
+                                    'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
                                     'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    'id_fer': id_ent_qr,
+                                    'id_fer': id_dest_qr,
                                     'codigo_d365': reg_qr.get('codigo_d365', ''),
-                                    'tipo_movimento': 'CAUTELA',
+                                    'tipo_movimento': 'TRANSFERÊNCIA',
                                     'localizacao_origem': f"{reg_qr.get('enderecamento_01', '')} / {reg_qr.get('enderecamento_02', '')}",
-                                    'localizacao_destino': 'CAMPO / COLABORADOR',
-                                    'responsavel_origem': 'ALMOXARIFADO',
-                                    'responsavel_destino': nome_col_qr.strip(),
-                                    'projeto': proj_col_qr.strip(),
-                                    'quantidade': str(qtd_lib_qr),
-                                    'documento': id_caut_q,
+                                    'localizacao_destino': f"{novo_e1.strip().upper()} / {novo_e2.strip().upper()}",
+                                    'responsavel_origem': st.session_state.get('nome_real', 'Operador'),
+                                    'responsavel_destino': 'ALMOXARIFADO',
+                                    'projeto': reg_qr.get('projeto', ''),
+                                    'quantidade': str(qtd_m_qr),
+                                    'documento': 'QR-SCAN',
                                     'usuario_registro': st.session_state.get('nome_real', 'Operador'),
-                                    'observacao': f"Entrega via Modo Operador QR ({qtd_lib_qr} un)"
+                                    'observacao': f"Reendereçamento via Modo Operador. {obs_qr.strip()}"
                                 }).execute()
                                 st.cache_data.clear()
-                                st.success(f"✅ Ferramenta `{id_ent_qr}` ({qtd_lib_qr} un) liberada para {nome_col_qr.strip()}!")
+                                st.success(f"✅ {qtd_m_qr} un transferida(s) para `{novo_e1.strip().upper()}` / `{novo_e2.strip().upper()}`!")
                                 st.rerun()
-                            else:
-                                st.error("Informe o colaborador.")
+                    else:
+                        mat_op = st.text_input("Bipe o Crachá ou Digite a Matrícula do Colaborador:")
+                        mat_op_limpa = limpar_texto_matricula(mat_op)
+                        emp_qr = {}
+                        if mat_op_limpa and not df_empregados.empty:
+                            m_eq = df_empregados[df_empregados['matricula'].astype(str) == mat_op_limpa]
+                            if not m_eq.empty:
+                                emp_qr = m_eq.iloc[0].fillna("").to_dict()
+                                st.info(f"👤 Colaborador: **{emp_qr.get('nome')}** | Projeto: {emp_qr.get('projeto')}")
+
+                        with st.form("form_qr_lib_cautela"):
+                            cl1, cl2, cl3 = st.columns(3)
+                            with cl1:
+                                qtd_lib_qr = st.number_input(f"Qtd a Liberar (Máx: {max_q_qr})", min_value=1, max_value=max_q_qr, value=1)
+                            with cl2:
+                                nome_col_qr = st.text_input("Nome do Colaborador *", value=emp_qr.get('nome', ''))
+                            with cl3:
+                                proj_col_qr = st.text_input("Projeto *", value=emp_qr.get('projeto', ''))
+
+                            if st.form_submit_button("🚀 Liberar Ferramenta para o Colaborador", type="primary"):
+                                if nome_col_qr.strip():
+                                    hoje_s = datetime.now().strftime('%Y-%m-%d')
+                                    stamp_q = datetime.now().strftime('%Y%m%d%H%M%S')
+                                    id_caut_q = f"CAU-{stamp_q}-QR"
+                                    id_ent_qr, _ = _executar_movimentacao_quantidade(
+                                        df_fer, id_sel_qr, qtd_lib_qr, "EM CAUTELA",
+                                        reg_qr.get('condicao_fisica', 'USADO - BOM'), "CAMPO / COLABORADOR",
+                                        nome_col_qr.strip(), novo_mat=mat_op_limpa, novo_proj=proj_col_qr.strip(),
+                                        novo_coord=emp_qr.get('unidade', ''), dt_entrega=hoje_s
+                                    )
+                                    supabase.table('cautelas_ferramentas').insert({
+                                        'id_cautela': id_caut_q,
+                                        'id_fer': id_ent_qr,
+                                        'codigo_d365': reg_qr.get('codigo_d365', ''),
+                                        'colaborador': nome_col_qr.strip(),
+                                        'matricula': mat_op_limpa,
+                                        'projeto': proj_col_qr.strip(),
+                                        'coordenacao': emp_qr.get('unidade', ''),
+                                        'data_entrega': hoje_s,
+                                        'condicao_entrega': reg_qr.get('condicao_fisica', 'USADO - BOM'),
+                                        'data_prevista_devolucao': (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d'),
+                                        'data_efetiva_devolucao': '',
+                                        'condicao_devolucao': '',
+                                        'status': 'EM CAUTELA',
+                                        'observacao': f"[TRM-QR-{stamp_q}] Qtd: {qtd_lib_qr} (Liberado via Modo Operador)"
+                                    }).execute()
+                                    supabase.table('mov_ferramentas').insert({
+                                        'id_movimento': f"MVF-{stamp_q}-QR",
+                                        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        'id_fer': id_ent_qr,
+                                        'codigo_d365': reg_qr.get('codigo_d365', ''),
+                                        'tipo_movimento': 'CAUTELA',
+                                        'localizacao_origem': f"{reg_qr.get('enderecamento_01', '')} / {reg_qr.get('enderecamento_02', '')}",
+                                        'localizacao_destino': 'CAMPO / COLABORADOR',
+                                        'responsavel_origem': 'ALMOXARIFADO',
+                                        'responsavel_destino': nome_col_qr.strip(),
+                                        'projeto': proj_col_qr.strip(),
+                                        'quantidade': str(qtd_lib_qr),
+                                        'documento': id_caut_q,
+                                        'usuario_registro': st.session_state.get('nome_real', 'Operador'),
+                                        'observacao': f"Entrega via Modo Operador QR ({qtd_lib_qr} un)"
+                                    }).execute()
+                                    st.cache_data.clear()
+                                    st.success(f"✅ Ferramenta `{id_ent_qr}` ({qtd_lib_qr} un) liberada para {nome_col_qr.strip()}!")
+                                    st.rerun()
+                                else:
+                                    st.error("Informe o colaborador.")
 
     with aba_etiquetas:
         st.markdown("###### 🖨️ Impressão em Lote de Folha de Etiquetas QR Code (PDF A4 - 21 Etiquetas por Folha)")
@@ -760,7 +1037,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
             "Selecione o Tipo de Folha de Etiquetas:",
             [
                 "📍 1. Etiquetas de ENDEREÇAMENTO 01 e 02 (Prateleiras e Caixas da Planilha)",
-                "🛠️ 2. Etiquetas Individuais de FERRAMENTAS (ID FER + Cód D365)",
+                "🛠️ 2. Etiquetas Individuais de FERRAMENTAS (Busca Estilo Excel)",
                 "✍️ 3. Etiquetas Avulsas / Novos Endereços Personalizados"
             ],
             horizontal=False
@@ -807,13 +1084,11 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
 
         elif modo_lote_qr.startswith("🛠️"):
             if not df_fer.empty:
-                op_fer_lbl = df_fer.apply(lambda r: f"{r['id_controle']} | Cód {r['codigo_d365']} - {r['descricao_d365'] or r['descricao_ferramenta']} ({r['enderecamento_01']})", axis=1).tolist()
-                sel_fer_lbl = st.multiselect("Selecione as Ferramentas (21 por folha A4):", options=op_fer_lbl, default=op_fer_lbl[:21])
-                for item_l in sel_fer_lbl:
-                    id_f_l = item_l.split(" | ")[0]
-                    r_f = df_fer[df_fer['id_controle'] == id_f_l].iloc[0]
+                st.markdown("Marque na tabela abaixo as ferramentas para gerar etiquetas:")
+                df_sel_etq = render_seletor_excel_ferramentas(df_fer, "etq_lote_fer", multiplo=True, altura=220)
+                for _, r_f in df_sel_etq.iterrows():
                     etiquetas_para_gerar.append({
-                        'codigo': id_f_l,
+                        'codigo': r_f['id_controle'],
                         'tipo': f"D365: {r_f.get('codigo_d365', '')} | {r_f.get('enderecamento_01', '')}",
                         'subtitulo': str(r_f.get('descricao_d365') or r_f.get('descricao_ferramenta', ''))
                     })
@@ -840,37 +1115,23 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F2: FLUXO DE INSPEÇÃO E MOVIMENTAÇÃO POR QUANTIDADE
+# F2: FLUXO DE INSPEÇÃO E MOVIMENTAÇÃO (COM BUSCA ESTILO EXCEL)
 # ==========================================
 def render_inspecao_movimentacao_fer(df_fer):
     st.subheader("🔍 Fluxo de Inspeção, Classificação e Movimentação por Quantidade")
 
     aba_triagem, aba_mov_geral = st.tabs([
         "🟡 Fila de Inspeção e Decisão Técnica",
-        "🔄 Movimentação / Transferência (Com Débito de Quantidade)"
+        "🔄 Movimentação / Transferência (Busca Estilo Excel)"
     ])
 
     with aba_triagem:
-        if not df_fer.empty:
-            mask_triagem = (
-                df_fer['status_operacional'].isin(['EM INSPEÇÃO', 'AGUARDANDO DECISÃO', 'BLOQUEADO']) |
-                df_fer['condicao_fisica'].isin(['EM INSPEÇÃO', 'COM DEFEITO'])
-            )
-            df_fila_insp = df_fer[mask_triagem].copy()
-        else:
-            df_fila_insp = pd.DataFrame()
+        st.markdown("###### 1️⃣ Filtre e marque a ferramenta para Inspecionar / Decidir:")
+        df_sel_insp = render_seletor_excel_ferramentas(df_fer, "insp_fer", multiplo=False, altura=210)
 
-        if not df_fila_insp.empty:
-            st.dataframe(df_fila_insp[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'condicao_fisica', 'status_operacional', 'enderecamento_01', 'enderecamento_02', 'quantidade']], use_container_width=True, hide_index=True, height=220)
-
-        busca_insp = st.text_input("🔍 Digite o ID FER, Código D365, Endereço ou Série para Inspecionar / Decidir:")
-        fer_match = buscar_ferramenta(busca_insp, df_fer) if busca_insp else pd.DataFrame()
-
-        if not fer_match.empty:
-            op_lotes = fer_match.apply(lambda r: f"{r['id_controle']} | Cód: {r['codigo_d365']} | {r['descricao_ferramenta']} | Qtd: {r['quantidade']} ({r['status_operacional']})", axis=1).tolist()
-            sel_lote_insp = st.selectbox("Selecione o Lote exato:", op_lotes)
-            id_fer_real = sel_lote_insp.split(" | ")[0]
-            reg = fer_match[fer_match['id_controle'] == id_fer_real].iloc[0].to_dict()
+        if not df_sel_insp.empty:
+            reg = df_sel_insp.iloc[0].to_dict()
+            id_fer_real = reg['id_controle']
             qtd_max_insp = _parse_int(reg.get('quantidade', '1'), 1)
 
             decisao = st.radio(
@@ -933,74 +1194,80 @@ def render_inspecao_movimentacao_fer(df_fer):
                     st.rerun()
 
     with aba_mov_geral:
-        busca_mv = st.text_input("🔍 Buscar Ferramenta (ID FER, Código D365, Endereçamento 01/02 ou Descrição):", key="b_mv_fer")
-        if busca_mv:
-            f_mv = buscar_ferramenta(busca_mv, df_fer)
-            if f_mv.empty and not df_fer.empty:
-                t_b = busca_mv.strip().lower()
-                f_mv = df_fer[df_fer['descricao_ferramenta'].astype(str).str.lower().str.contains(t_b, na=False)]
-        else:
-            f_mv = pd.DataFrame()
+        st.markdown("###### 1️⃣ Busque (Estilo Excel) e marque o(s) item(ns) para movimentar:")
+        df_sel_mv = render_seletor_excel_ferramentas(df_fer, "mov_fer_excel", multiplo=True, altura=220)
 
-        if not f_mv.empty:
-            op_mv = f_mv.apply(lambda r: f"{r['id_controle']} | Cód: {r['codigo_d365']} | {r['descricao_ferramenta']} | Saldo Lote: {r['quantidade']} | End: {r['enderecamento_01']} / {r['enderecamento_02']}", axis=1).tolist()
-            sel_mv = st.selectbox("Selecione o Lote para Movimentar:", op_mv)
-            id_f = sel_mv.split(" | ")[0]
-            r_mv = f_mv[f_mv['id_controle'] == id_f].iloc[0].to_dict()
-            qtd_lote = _parse_int(r_mv.get('quantidade', '1'), 1)
+        if not df_sel_mv.empty:
+            qtds_mv_map = {}
+            st.markdown("###### 2️⃣ Informe a quantidade a movimentar de cada item marcado:")
+            cols_qm = st.columns(2)
+            for idx_m, (_, r_m) in enumerate(df_sel_mv.iterrows()):
+                id_f_m = r_m['id_controle']
+                max_q_m = _parse_int(r_m.get('quantidade', '1'), 1)
+                with cols_qm[idx_m % 2]:
+                    qtds_mv_map[id_f_m] = st.number_input(
+                        f"Cód {r_m.get('codigo_d365')} - {r_m.get('descricao_d365') or r_m.get('descricao_ferramenta')} (Máx: {max_q_m})",
+                        min_value=1, max_value=max_q_m, value=1, key=f"q_mv_ex_{id_f_m}"
+                    )
 
+            r_mv0 = df_sel_mv.iloc[0].to_dict()
             with st.form("form_mov_fer_avulso"):
                 cm1, cm2, cm3 = st.columns(3)
                 with cm1:
-                    qtd_mover = st.number_input(f"Quantidade a Movimentar (Máx: {qtd_lote}) *", min_value=1, max_value=qtd_lote, value=1)
                     t_mov = st.selectbox("Tipo de Movimento:", LISTA_TIPOS_MOV_FER)
                     loc_dest = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER)
                 with cm2:
-                    idx_st = LISTA_STATUS_OPERACIONAL.index(r_mv['status_operacional']) if r_mv['status_operacional'] in LISTA_STATUS_OPERACIONAL else 0
-                    idx_cd = LISTA_CONDICAO_FISICA.index(r_mv['condicao_fisica']) if r_mv['condicao_fisica'] in LISTA_CONDICAO_FISICA else 1
+                    idx_st = LISTA_STATUS_OPERACIONAL.index(r_mv0['status_operacional']) if r_mv0['status_operacional'] in LISTA_STATUS_OPERACIONAL else 0
+                    idx_cd = LISTA_CONDICAO_FISICA.index(r_mv0['condicao_fisica']) if r_mv0['condicao_fisica'] in LISTA_CONDICAO_FISICA else 1
                     st_novo = st.selectbox("Novo Status Operacional:", LISTA_STATUS_OPERACIONAL, index=idx_st)
                     cd_nova = st.selectbox("Condição Física:", LISTA_CONDICAO_FISICA, index=idx_cd)
-                    end1_mv = st.text_input("Endereçamento 01 Destino:", value=r_mv.get('enderecamento_01', ''))
+                    end1_mv = st.text_input("Endereçamento 01 Destino:", value=r_mv0.get('enderecamento_01', ''))
                 with cm3:
-                    end2_mv = st.text_input("Endereçamento 02 Destino:", value=r_mv.get('enderecamento_02', ''))
-                    resp_dest = st.text_input("Responsável Destino:", value=r_mv.get('responsavel_atual', 'ALMOXARIFADO'))
-                    proj_dest = st.text_input("Projeto:", value=r_mv.get('projeto', ''))
+                    end2_mv = st.text_input("Endereçamento 02 Destino:", value=r_mv0.get('enderecamento_02', ''))
+                    resp_dest = st.text_input("Responsável Destino:", value=r_mv0.get('responsavel_atual', 'ALMOXARIFADO'))
+                    proj_dest = st.text_input("Projeto:", value=r_mv0.get('projeto', ''))
 
                 obs_mv = st.text_input("Observação do Movimento:")
 
-                if st.form_submit_button("🚀 Confirmar Movimentação de Quantidade", type="primary"):
-                    id_movimentado, _ = _executar_movimentacao_quantidade(
-                        df_fer, id_f, qtd_mover, st_novo, cd_nova, loc_dest,
-                        resp_dest.strip(), novo_proj=proj_dest.strip(), obs_extra=obs_mv.strip(),
-                        novo_end1=end1_mv.strip().upper(), novo_end2=end2_mv.strip().upper()
-                    )
-                    supabase.table('mov_ferramentas').insert({
-                        'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'id_fer': id_movimentado,
-                        'codigo_d365': r_mv.get('codigo_d365', ''),
-                        'tipo_movimento': t_mov,
-                        'localizacao_origem': f"{r_mv.get('localizacao', '')} ({r_mv.get('enderecamento_01', '')})",
-                        'localizacao_destino': f"{loc_dest} ({end1_mv.strip()} {end2_mv.strip()})",
-                        'responsavel_origem': r_mv.get('responsavel_atual', ''),
-                        'responsavel_destino': resp_dest.strip(),
-                        'projeto': proj_dest.strip(),
-                        'quantidade': str(qtd_mover),
-                        'documento': '',
-                        'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                        'observacao': obs_mv.strip()
-                    }).execute()
+                if st.form_submit_button(f"🚀 Confirmar Movimentação ({len(df_sel_mv)} item/itens)", type="primary"):
+                    prox_seq = _maior_num_id_fer(df_fer) + 1
+                    stamp_m = datetime.now().strftime('%Y%m%d%H%M%S')
+                    for idx_k, (id_f_k, qtd_k) in enumerate(qtds_mv_map.items(), start=1):
+                        r_atual = df_sel_mv[df_sel_mv['id_controle'] == id_f_k].iloc[0].to_dict()
+                        id_movimentado, prox_seq = _executar_movimentacao_quantidade(
+                            df_fer, id_f_k, qtd_k, st_novo, cd_nova, loc_dest,
+                            resp_dest.strip(), novo_proj=proj_dest.strip(), obs_extra=obs_mv.strip(),
+                            novo_end1=end1_mv.strip().upper(), novo_end2=end2_mv.strip().upper(),
+                            proximo_num_livre=prox_seq
+                        )
+                        supabase.table('mov_ferramentas').insert({
+                            'id_movimento': f"MVF-{stamp_m}-{idx_k:02d}",
+                            'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'id_fer': id_movimentado,
+                            'codigo_d365': r_atual.get('codigo_d365', ''),
+                            'tipo_movimento': t_mov,
+                            'localizacao_origem': f"{r_atual.get('localizacao', '')} ({r_atual.get('enderecamento_01', '')})",
+                            'localizacao_destino': f"{loc_dest} ({end1_mv.strip()} {end2_mv.strip()})",
+                            'responsavel_origem': r_atual.get('responsavel_atual', ''),
+                            'responsavel_destino': resp_dest.strip(),
+                            'projeto': proj_dest.strip(),
+                            'quantidade': str(qtd_k),
+                            'documento': '',
+                            'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
+                            'observacao': obs_mv.strip()
+                        }).execute()
+                    st.session_state["sel_excel_ids_mov_fer_excel"] = set()
                     st.cache_data.clear()
-                    st.success(f"✅ {qtd_mover} unidade(s) movimentada(s) com sucesso!")
+                    st.success("✅ Movimentação concluída com sucesso!")
                     st.rerun()
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F3: CONTROLE DE CAUTELA MÚLTIPLA E REIMPRESSÃO DE TERMOS
+# F3: CONTROLE DE CAUTELA MÚLTIPLA (COM SELETOR ESTILO EXCEL) E REIMPRESSÃO
 # ==========================================
 def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
-    st.subheader("👷 Controle de Cautela (Entrega Múltipla, Devolução por Quantidade e Reimpressão de Termos)")
+    st.subheader("👷 Controle de Cautela (Seleção Estilo Excel, Devolução por Quantidade e Reimpressão)")
 
     if st.session_state.get('pdf_cautela_fer'):
         st.success(st.session_state.pdf_cautela_fer.get('msg', "✅ Termo de Responsabilidade pronto para download!"))
@@ -1033,34 +1300,28 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
         if fer_disponiveis.empty:
             st.warning("⚠️ Não há ferramentas com status 'DISPONÍVEL' e saldo positivo no momento.")
         else:
-            c_b1, c_b2 = st.columns(2)
-            with c_b1:
-                opcoes_f = fer_disponiveis.apply(
-                    lambda r: f"Cód D365: {r['codigo_d365']} - {r['descricao_d365'] or r['descricao_ferramenta']} | Saldo: {r['quantidade']} | End: {r['enderecamento_01']} [ID: {r['id_controle']}]", axis=1
-                ).tolist()
-                itens_selecionados = st.multiselect("1️⃣ Busca Múltipla (Digite o Código D365, Descrição ou Endereço):", opcoes_f)
+            st.markdown("###### 1️⃣ Busque (Estilo Filtro Excel) e marque na tabela as ferramentas a entregar:")
+            df_itens_selecionados = render_seletor_excel_ferramentas(fer_disponiveis, "cautela_entrega_excel", multiplo=True, altura=220)
 
-            with c_b2:
-                mat_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
-                mat_limpa = limpar_texto_matricula(mat_busca)
-                emp_info = {}
-                if mat_limpa and not df_empregados.empty:
-                    m_e = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
-                    if not m_e.empty:
-                        emp_info = m_e.iloc[0].fillna("").to_dict()
-                        st.success(f"👤 Colaborador: **{emp_info.get('nome')}** | Projeto: {emp_info.get('projeto')}")
-                    else:
-                        st.warning("⚠️ Matrícula não localizada na base.")
+            mat_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
+            mat_limpa = limpar_texto_matricula(mat_busca)
+            emp_info = {}
+            if mat_limpa and not df_empregados.empty:
+                m_e = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
+                if not m_e.empty:
+                    emp_info = m_e.iloc[0].fillna("").to_dict()
+                    st.success(f"👤 Colaborador: **{emp_info.get('nome')}** | Projeto: {emp_info.get('projeto')} | Unidade: {emp_info.get('unidade')}")
+                else:
+                    st.warning("⚠️ Matrícula não localizada na base.")
 
             qtds_entregar = {}
-            if itens_selecionados:
-                st.markdown("###### 📦 Informe a quantidade a debitar de cada ferramenta selecionada:")
+            if not df_itens_selecionados.empty:
+                st.markdown("###### 3️⃣ Informe a quantidade a debitar de cada ferramenta marcada:")
                 cols_q = st.columns(2)
-                for idx, item_str in enumerate(itens_selecionados):
-                    id_fer = item_str.split("[ID: ")[1].replace("]", "")
-                    saldo_str = item_str.split(" | Saldo: ")[1].split(" ")[0]
-                    saldo_val = _parse_int(saldo_str, 1)
-                    resumo_item = item_str.split(" | Saldo:")[0]
+                for idx, (_, row_sel) in enumerate(df_itens_selecionados.iterrows()):
+                    id_fer = row_sel['id_controle']
+                    saldo_val = _parse_int(row_sel.get('quantidade', '1'), 1)
+                    resumo_item = f"Cód D365: {row_sel.get('codigo_d365')} - {row_sel.get('descricao_d365') or row_sel.get('descricao_ferramenta')} [{id_fer}]"
                     with cols_q[idx % 2]:
                         qtds_entregar[id_fer] = st.number_input(
                             f"{resumo_item} (Máx: {saldo_val})",
@@ -1080,10 +1341,10 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                     dt_prev = st.date_input("Data Prevista de Devolução", datetime.today() + timedelta(days=30))
 
                 obs_caut = st.text_input("Observações da Entrega / Acessórios:")
-                gerar_pdf_chk = st.checkbox("Gerar Termo de Responsabilidade Único em PDF (Inclui todas as ferramentas selecionadas)", value=True)
+                gerar_pdf_chk = st.checkbox("Gerar Termo de Responsabilidade Único em PDF (Inclui todas as ferramentas marcadas)", value=True)
 
                 if st.form_submit_button("🚀 Confirmar Cautela Múltipla e Debitar Quantidades", type="primary"):
-                    if col_nome.strip() and itens_selecionados:
+                    if col_nome.strip() and not df_itens_selecionados.empty:
                         try:
                             hoje_s = dt_ent.strftime('%Y-%m-%d')
                             agora_full = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1214,13 +1475,14 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                         'msg': f"✅ {len(lista_fakes_pdf)} ferramenta(s) entregue(s) sob o Termo {termo_lote_id}! Clique abaixo para baixar."
                                     }
 
+                            st.session_state["sel_excel_ids_cautela_entrega_excel"] = set()
                             registrar_log_auditoria("CAUTELA MÚLTIPLA", termo_lote_id, f"{len(lista_fakes_pdf)} itens entregues para {col_nome.strip()}.")
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao processar cautela múltipla: {e}")
-                    elif not itens_selecionados:
-                        st.error("Selecione pelo menos uma ferramenta.")
+                    elif df_itens_selecionados.empty:
+                        st.error("Marque pelo menos uma ferramenta na tabela acima.")
                     else:
                         st.error("Informe o nome do colaborador.")
 
@@ -1229,72 +1491,78 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
         if cautelas_ativas.empty:
             st.success("🎉 Nenhuma ferramenta pendente de devolução no momento.")
         else:
-            st.dataframe(cautelas_ativas[['id_cautela', 'id_fer', 'codigo_d365', 'colaborador', 'matricula', 'projeto', 'data_entrega', 'observacao']], use_container_width=True, hide_index=True, height=240)
-            op_dev = cautelas_ativas.apply(lambda r: f"{r['id_cautela']} | {r['id_fer']} (Cód: {r['codigo_d365']}) - {r['colaborador']} | {r['observacao']}", axis=1).tolist()
-            sel_dev = st.selectbox("Selecione a Cautela para Devolução:", op_dev)
-            id_caut_dev = sel_dev.split(" | ")[0]
-            reg_c = cautelas_ativas[cautelas_ativas['id_cautela'] == id_caut_dev].iloc[0].to_dict()
-            id_f_dev = reg_c['id_fer']
+            busca_dev = st.text_input("🔍 Filtrar Cautelas Ativas (Colaborador, Matrícula, Cód D365 ou ID FER):", placeholder="Digite para filtrar rapidamente...")
+            if busca_dev.strip():
+                t_dv = busca_dev.strip().lower()
+                cautelas_ativas = cautelas_ativas[cautelas_ativas.astype(str).apply(lambda x: x.str.lower().str.contains(t_dv, na=False)).any(axis=1)]
 
-            f_dev_match = df_fer[df_fer['id_controle'] == id_f_dev] if not df_fer.empty else pd.DataFrame()
-            qtd_atual_cautela = _parse_int(f_dev_match.iloc[0]['quantidade'], 1) if not f_dev_match.empty else 1
+            st.dataframe(cautelas_ativas[['id_cautela', 'id_fer', 'codigo_d365', 'colaborador', 'matricula', 'projeto', 'data_entrega', 'observacao']], use_container_width=True, hide_index=True, height=220)
+            if not cautelas_ativas.empty:
+                op_dev = cautelas_ativas.apply(lambda r: f"{r['id_cautela']} | {r['id_fer']} (Cód: {r['codigo_d365']}) - {r['colaborador']} | {r['observacao']}", axis=1).tolist()
+                sel_dev = st.selectbox("Selecione a Cautela para Devolução:", op_dev)
+                id_caut_dev = sel_dev.split(" | ")[0]
+                reg_c = cautelas_ativas[cautelas_ativas['id_cautela'] == id_caut_dev].iloc[0].to_dict()
+                id_f_dev = reg_c['id_fer']
 
-            with st.form("form_dev_cautela"):
-                cd1, cd2, cd3, cd4 = st.columns(4)
-                with cd1:
-                    qtd_devolver = st.number_input(f"Qtd Devolvida (Máx: {qtd_atual_cautela})", min_value=1, max_value=qtd_atual_cautela, value=qtd_atual_cautela)
-                with cd2:
-                    cond_dev = st.selectbox("Condição na Devolução:", LISTA_CONDICAO_FISICA, index=1)
-                with cd3:
-                    st_pos_dev = st.selectbox("Status Após Devolução:", ["DISPONÍVEL", "EM INSPEÇÃO", "EM MANUTENÇÃO", "BLOQUEADO"], index=0)
-                with cd4:
-                    loc_pos_dev = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER, index=0 if st_pos_dev == "DISPONÍVEL" else 1)
+                f_dev_match = df_fer[df_fer['id_controle'] == id_f_dev] if not df_fer.empty else pd.DataFrame()
+                qtd_atual_cautela = _parse_int(f_dev_match.iloc[0]['quantidade'], 1) if not f_dev_match.empty else 1
 
-                obs_dev = st.text_input("Observação no Recebimento / Avarias:")
+                with st.form("form_dev_cautela"):
+                    cd1, cd2, cd3, cd4 = st.columns(4)
+                    with cd1:
+                        qtd_devolver = st.number_input(f"Qtd Devolvida (Máx: {qtd_atual_cautela})", min_value=1, max_value=qtd_atual_cautela, value=qtd_atual_cautela)
+                    with cd2:
+                        cond_dev = st.selectbox("Condição na Devolução:", LISTA_CONDICAO_FISICA, index=1)
+                    with cd3:
+                        st_pos_dev = st.selectbox("Status Após Devolução:", ["DISPONÍVEL", "EM INSPEÇÃO", "EM MANUTENÇÃO", "BLOQUEADO"], index=0)
+                    with cd4:
+                        loc_pos_dev = st.selectbox("Localização Destino:", LISTA_LOCALIZACOES_FER, index=0 if st_pos_dev == "DISPONÍVEL" else 1)
 
-                if st.form_submit_button("📥 Confirmar Devolução e Recompor Saldo", type="primary"):
-                    hoje_d = datetime.now().strftime('%Y-%m-%d')
-                    if not f_dev_match.empty:
-                        id_retorno, _ = _executar_movimentacao_quantidade(
-                            df_fer, id_f_dev, qtd_devolver, st_pos_dev, cond_dev, loc_pos_dev,
-                            "ALMOXARIFADO", novo_mat="", dt_devolucao=hoje_d, obs_extra=obs_dev.strip()
-                        )
-                    else:
-                        id_retorno = id_f_dev
+                    obs_dev = st.text_input("Observação no Recebimento / Avarias:")
 
-                    if qtd_devolver >= qtd_atual_cautela:
-                        supabase.table('cautelas_ferramentas').update({
-                            'data_efetiva_devolucao': hoje_d,
-                            'condicao_devolucao': cond_dev,
-                            'status': 'DEVOLVIDO',
-                            'observacao': f"{reg_c.get('observacao', '')} | Devolvido total ({qtd_devolver})".strip(" |")
-                        }).eq('id_cautela', id_caut_dev).execute()
-                    else:
-                        restante_caut = qtd_atual_cautela - qtd_devolver
-                        supabase.table('cautelas_ferramentas').update({
-                            'observacao': f"Qtd Restante em Cautela: {restante_caut} (Devolvido parcial: {qtd_devolver} em {hoje_d})"
-                        }).eq('id_cautela', id_caut_dev).execute()
+                    if st.form_submit_button("📥 Confirmar Devolução e Recompor Saldo", type="primary"):
+                        hoje_d = datetime.now().strftime('%Y-%m-%d')
+                        if not f_dev_match.empty:
+                            id_retorno, _ = _executar_movimentacao_quantidade(
+                                df_fer, id_f_dev, qtd_devolver, st_pos_dev, cond_dev, loc_pos_dev,
+                                "ALMOXARIFADO", novo_mat="", dt_devolucao=hoje_d, obs_extra=obs_dev.strip()
+                            )
+                        else:
+                            id_retorno = id_f_dev
 
-                    supabase.table('mov_ferramentas').insert({
-                        'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                        'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'id_fer': id_retorno,
-                        'codigo_d365': reg_c.get('codigo_d365', ''),
-                        'tipo_movimento': 'DEVOLUÇÃO',
-                        'localizacao_origem': 'CAMPO / COLABORADOR',
-                        'localizacao_destino': loc_pos_dev,
-                        'responsavel_origem': reg_c.get('colaborador', ''),
-                        'responsavel_destino': 'ALMOXARIFADO',
-                        'projeto': reg_c.get('projeto', ''),
-                        'quantidade': str(qtd_devolver),
-                        'documento': id_caut_dev,
-                        'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                        'observacao': f"Devolução de cautela ({qtd_devolver} un - {cond_dev}). {obs_dev.strip()}"
-                    }).execute()
+                        if qtd_devolver >= qtd_atual_cautela:
+                            supabase.table('cautelas_ferramentas').update({
+                                'data_efetiva_devolucao': hoje_d,
+                                'condicao_devolucao': cond_dev,
+                                'status': 'DEVOLVIDO',
+                                'observacao': f"{reg_c.get('observacao', '')} | Devolvido total ({qtd_devolver})".strip(" |")
+                            }).eq('id_cautela', id_caut_dev).execute()
+                        else:
+                            restante_caut = qtd_atual_cautela - qtd_devolver
+                            supabase.table('cautelas_ferramentas').update({
+                                'observacao': f"Qtd Restante em Cautela: {restante_caut} (Devolvido parcial: {qtd_devolver} em {hoje_d})"
+                            }).eq('id_cautela', id_caut_dev).execute()
 
-                    st.cache_data.clear()
-                    st.success(f"✅ {qtd_devolver} unidade(s) devolvida(s) e contabilizada(s) em {loc_pos_dev}!")
-                    st.rerun()
+                        supabase.table('mov_ferramentas').insert({
+                            'id_movimento': f"MVF-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                            'data': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'id_fer': id_retorno,
+                            'codigo_d365': reg_c.get('codigo_d365', ''),
+                            'tipo_movimento': 'DEVOLUÇÃO',
+                            'localizacao_origem': 'CAMPO / COLABORADOR',
+                            'localizacao_destino': loc_pos_dev,
+                            'responsavel_origem': reg_c.get('colaborador', ''),
+                            'responsavel_destino': 'ALMOXARIFADO',
+                            'projeto': reg_c.get('projeto', ''),
+                            'quantidade': str(qtd_devolver),
+                            'documento': id_caut_dev,
+                            'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
+                            'observacao': f"Devolução de cautela ({qtd_devolver} un - {cond_dev}). {obs_dev.strip()}"
+                        }).execute()
+
+                        st.cache_data.clear()
+                        st.success(f"✅ {qtd_devolver} unidade(s) devolvida(s) e contabilizada(s) em {loc_pos_dev}!")
+                        st.rerun()
 
     with aba_reimpressao:
         st.markdown("###### 🖨️ Central de Reimpressão de Termos de Ferramentas (Geração sob demanda)")
@@ -1391,10 +1659,10 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
     ])
 
     with aba_manut:
-        busca_m = st.text_input("🔍 Digite o ID FER ou Código D365 da ferramenta:", key="b_manut_f")
-        f_m = buscar_ferramenta(busca_m, df_fer) if busca_m else pd.DataFrame()
-        if not f_m.empty:
-            rm = f_m.iloc[0].to_dict()
+        st.markdown("###### Filtre e marque a ferramenta em manutenção:")
+        df_sel_m = render_seletor_excel_ferramentas(df_fer, "manut_fer_sel", multiplo=False, altura=190)
+        if not df_sel_m.empty:
+            rm = df_sel_m.iloc[0].to_dict()
             id_f_m = rm['id_controle']
             qtd_m_atual = _parse_int(rm.get('quantidade_manutencoes', '0'), 0)
             with st.form("form_reg_manut"):
@@ -1438,7 +1706,7 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
                         st.success("✅ Manutenção registrada!")
                         st.rerun()
 
-        st.dataframe(df_manut_fer, use_container_width=True, hide_index=True, height=350)
+        st.dataframe(df_manut_fer, use_container_width=True, hide_index=True, height=300)
 
     with aba_baixa:
         st.dataframe(df_baixa_fer, use_container_width=True, hide_index=True, height=400)
