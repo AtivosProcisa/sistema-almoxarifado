@@ -17,7 +17,8 @@ SUPABASE_KEY = "sb_publishable_y0JUFibeIhU-DBDcGFmREA_IlgsfNa0"
 
 COLUNAS_ATIVOS = [
     'item', 'valor', 'equipamento', 'marca', 'modelo', 'numero_serie', 
-    'patrimonio', 'cautela', 'projeto', 'coordenacao', 'nf_procisa', 
+    'patrimonio', 'cautela', 'enderecamento_01', 'enderecamento_02',
+    'projeto', 'coordenacao', 'nf_procisa', 
     'atualizado_em', 'condicoes_para_uso', 'acessorios', 'status_sistema'
 ]
 COLUNAS_MOV = [
@@ -30,12 +31,13 @@ COLUNAS_DIVERG = ['id_divergencia', 'data_registro', 'patrimonio', 'tipo_diverge
 COLUNAS_USUARIOS = ['usuario', 'senha', 'perfil', 'nome']
 COLUNAS_EMPREGADOS = ['matricula', 'nome', 'cpf', 'rg', 'projeto', 'unidade']
 
-# --- COLUNAS DO CONTROLE DE FERRAMENTAS USADAS ---
+# --- COLUNAS DO CONTROLE DE FERRAMENTAS USADAS (COM ENDEREÇAMENTO 01 E 02) ---
 COLUNAS_FERRAMENTAS = [
     'id_controle', 'codigo_d365', 'descricao_d365', 'descricao_ferramenta',
     'categoria', 'marca', 'modelo', 'numero_serie', 'patrimonio',
     'quantidade', 'unidade', 'condicao_fisica', 'status_operacional',
-    'localizacao', 'responsavel_atual', 'matricula', 'projeto', 'coordenacao',
+    'localizacao', 'enderecamento_01', 'enderecamento_02',
+    'responsavel_atual', 'matricula', 'projeto', 'coordenacao',
     'data_entrada', 'data_entrega', 'data_devolucao', 'ultima_movimentacao',
     'dias_sem_movimentacao', 'data_ultima_inspecao', 'proxima_inspecao',
     'valor_referencia', 'custo_acumulado_manutencao', 'quantidade_manutencoes',
@@ -188,6 +190,10 @@ def carregar_preferencias_colunas():
             mov = [c for c in dados.get('mov', COLUNAS_MOV) if c in COLUNAS_MOV]
             trm = [c for c in dados.get('trm', COLUNAS_TERMOS) if c in COLUNAS_TERMOS]
             fer = [c for c in dados.get('fer', COLUNAS_FERRAMENTAS) if c in COLUNAS_FERRAMENTAS]
+            # Garante que enderecamento_01 e enderecamento_02 apareçam se forem novos
+            for c_end in ['enderecamento_01', 'enderecamento_02']:
+                if c_end not in fer and c_end in COLUNAS_FERRAMENTAS:
+                    fer.append(c_end)
             return {
                 'inv': inv if inv else list(COLUNAS_ATIVOS),
                 'mov': mov if mov else list(COLUNAS_MOV),
@@ -228,10 +234,6 @@ def expurgar_linhas_nulas_nuvem():
         pass
     try:
         supabase.table('empregados').delete().is_('matricula', 'null').execute()
-    except Exception:
-        pass
-    try:
-        supabase.table('ativos_master').delete().is_('equipamento', 'null').is_('marca', 'null').execute()
     except Exception:
         pass
 
@@ -358,6 +360,18 @@ def carregar_dados_ferramental():
         df_fer = df_fer[df_fer['id_controle'].apply(matricula_valida)].copy()
         df_fer['dias_sem_movimentacao'] = df_fer['ultima_movimentacao'].apply(calcular_dias_sem_mov)
 
+        # Retrocompatibilidade automática: se enderecamento_01 estiver vazio mas estava gravado em observacoes ("Endereço: X / Y"), extrai automaticamente
+        for idx, r in df_fer.iterrows():
+            obs = str(r.get('observacoes', ''))
+            e1 = str(r.get('enderecamento_01', '')).strip()
+            e2 = str(r.get('enderecamento_02', '')).strip()
+            if not e1 and not e2 and obs.startswith("Endereço:"):
+                partes = obs.replace("Endereço:", "").split("/")
+                if len(partes) >= 1:
+                    df_fer.at[idx, 'enderecamento_01'] = partes[0].strip()
+                if len(partes) >= 2:
+                    df_fer.at[idx, 'enderecamento_02'] = partes[1].strip()
+
     return df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365
 
 def gerar_proximo_id_fer(df_fer):
@@ -380,7 +394,9 @@ def buscar_ferramenta(termo_busca, df_fer):
     c_d365 = df_fer['codigo_d365'].fillna("").astype(str).str.strip().str.upper()
     pat = df_fer['patrimonio'].fillna("").astype(str).str.strip().str.upper()
     ser = df_fer['numero_serie'].fillna("").astype(str).str.strip().str.upper()
-    return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t)]
+    e1 = df_fer['enderecamento_01'].fillna("").astype(str).str.strip().str.upper()
+    e2 = df_fer['enderecamento_02'].fillna("").astype(str).str.strip().str.upper()
+    return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t) | (e1 == t) | (e2 == t)]
 
 def salvar_dados_massa(tabela, df_massa, colunas):
     try:
@@ -399,7 +415,9 @@ def buscar_ativo(termo_busca, df):
     termo = str(termo_busca).strip().upper()
     patrimonios = df['patrimonio'].fillna("").astype(str).str.strip().str.upper()
     series = df['numero_serie'].fillna("").astype(str).str.strip().str.upper()
-    return df[(patrimonios == termo) | (series == termo)]
+    e1 = df['enderecamento_01'].fillna("").astype(str).str.strip().str.upper() if 'enderecamento_01' in df.columns else pd.Series([""]*len(df))
+    e2 = df['enderecamento_02'].fillna("").astype(str).str.strip().str.upper() if 'enderecamento_02' in df.columns else pd.Series([""]*len(df))
+    return df[(patrimonios == termo) | (series == termo) | (e1 == termo) | (e2 == termo)]
 
 def calcular_uso_supabase(dfs_lista, limite_mb=500.0):
     total_bytes = 0
