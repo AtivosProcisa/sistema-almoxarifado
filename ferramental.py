@@ -3,7 +3,10 @@ import pandas as pd
 from datetime import datetime, timedelta
 import urllib.parse
 import nuvem
-from pdf_termo import converter_df_excel_simples, gerar_backup_completo_excel, gerar_termo_pdf
+from pdf_termo import (
+    converter_df_excel_simples, gerar_backup_completo_excel,
+    gerar_termo_pdf, gerar_etiquetas_qrcode_pdf
+)
 
 supabase = nuvem.supabase
 registrar_log_auditoria = nuvem.registrar_log_auditoria
@@ -208,7 +211,7 @@ def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status,
             return id_origem, num_seq
 
 # ==========================================
-# F1: PAINEL GERENCIAL (SEM NÚMEROS NO TOPO + ENDEREÇAMENTO 01/02)
+# F1: PAINEL GERENCIAL
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
@@ -216,8 +219,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         st.session_state.saved_cols_fer = prefs.get('fer', list(COLUNAS_FERRAMENTAS))
 
     st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-
-    # ITEM 01: Cabeçalho limpo sem números no alto da tela (informações já constam nas abas)
     st.subheader("🛠️ Controle Gerencial de Ferramentas Usadas")
 
     abas_principais = [
@@ -314,7 +315,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
         else:
             st.info("Nenhuma ferramenta cadastrada na base.")
 
-    # --- ABA 1: CADASTRO COM ENDEREÇAMENTO 01 E 02 ---
     with tabs[1]:
         st.subheader("➕ Recebimento / Cadastro de Ferramenta Usada")
         prox_id = gerar_proximo_id_fer(df_fer)
@@ -425,11 +425,9 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 else:
                     st.error("Preencha a 'Descrição Operacional da Ferramenta'.")
 
-    # --- ABA 2: HISTÓRICO ---
     with tabs[2]:
         st.dataframe(df_mov_fer, use_container_width=True, hide_index=True, height=450)
 
-    # --- ABA 3: IMPORTAR / EXPORTAR (MAPEANDO ENDEREÇAMENTO 01 E 02 OFICIAIS) ---
     with tabs[3]:
         stamp = datetime.now().strftime('%Y%m%d_%H%M')
         ce1, ce2, ce3 = st.columns(3)
@@ -462,7 +460,6 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 }
                 df_up_f = df_up_f.rename(columns=de_para_massivo)
 
-                # ITEM 02: Preserva Endereçamento 01 e Endereçamento 02 nas colunas próprias
                 if 'enderecamento_01' not in df_up_f.columns:
                     df_up_f['enderecamento_01'] = ''
                 else:
@@ -548,15 +545,29 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F6: MODO OPERADOR - LEITOR QR CODE / CÓDIGO DE BARRAS (ITEM 03)
+# F6: MODO OPERADOR - LEITOR QR CODE + FOLHA DE ETIQUETAS EM LOTE
 # ==========================================
 def render_operador_qrcode_fer(df_fer, df_empregados):
     st.subheader("📷 Modo Operador — Leitura de QR Code / Código de Barras (Ferramental)")
     st.caption("Bipe o código de barras/QR Code da Prateleira (Endereçamento 01/02) ou da Ferramenta (ID FER / Cód D365) para localizar e movimentar instantaneamente.")
 
+    if st.session_state.get('pdf_etiquetas_fer_pronto'):
+        st.success(st.session_state.pdf_etiquetas_fer_pronto['msg'])
+        st.download_button(
+            "📥 Baixar Folha de Etiquetas QR Code em PDF (A4 - Pronta para Impressão)",
+            data=st.session_state.pdf_etiquetas_fer_pronto['bytes'],
+            file_name=st.session_state.pdf_etiquetas_fer_pronto['nome'],
+            mime="application/pdf",
+            type="primary"
+        )
+        if st.button("✖️ Fechar Folha de Etiquetas"):
+            st.session_state.pdf_etiquetas_fer_pronto = None
+            st.rerun()
+        st.divider()
+
     aba_bipar, aba_etiquetas = st.tabs([
         "📡 Coletor / Scanner (Reconhecimento e Movimentação Rápida)",
-        "🏷️ Gerador de Etiquetas QR Code (Endereços e Ferramentas)"
+        "🏷️ Gerador de Folha de Etiquetas QR Code em Lote (PDF A4)"
     ])
 
     with aba_bipar:
@@ -733,19 +744,104 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                                 st.error("Informe o colaborador.")
 
     with aba_etiquetas:
-        st.markdown("###### 🏷️ Visualizador de QR Codes de Endereçamento e Ferramentas")
-        st.caption("Gere etiquetas QR Code para colar nas prateleiras (`Endereçamento 01`), caixas (`Endereçamento 02`) ou ferramentas (`ID FER`).")
-        texto_qr_gerar = st.text_input("Digite ou selecione o Código para gerar a etiqueta QR Code (Ex: US-AC1N1P9CX1 ou FER-000001):", value="US-AC1N1P9CX1")
-        if texto_qr_gerar.strip():
-            url_qr = f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={urllib.parse.quote(texto_qr_gerar.strip().upper())}"
-            c_qr1, c_qr2 = st.columns([1, 3])
-            with c_qr1:
-                st.image(url_qr, caption=f"QR: {texto_qr_gerar.strip().upper()}", width=180)
-            with c_qr2:
-                st.info(
-                    f"**Código Codificado:** `{texto_qr_gerar.strip().upper()}`\n\n"
-                    "Quando o operador ler este QR Code no coletor ou telemóvel na aba ao lado, o sistema carregará instantaneamente todos os itens vinculados a este endereço ou código."
+        st.markdown("###### 🖨️ Impressão em Lote de Folha de Etiquetas QR Code (PDF A4 - 21 Etiquetas por Folha)")
+        st.caption("Extraia automaticamente da planilha importada todos os códigos de Endereçamento 01 (Prateleiras), Endereçamento 02 (Caixas/Gavetas) ou IDs de Ferramentas.")
+
+        modo_lote_qr = st.radio(
+            "Selecione o Tipo de Folha de Etiquetas:",
+            [
+                "📍 1. Etiquetas de ENDEREÇAMENTO 01 e 02 (Prateleiras e Caixas da Planilha)",
+                "🛠️ 2. Etiquetas Individuais de FERRAMENTAS (ID FER + Cód D365)",
+                "✍️ 3. Etiquetas Avulsas / Novos Endereços Personalizados"
+            ],
+            horizontal=False
+        )
+
+        etiquetas_para_gerar = []
+
+        if modo_lote_qr.startswith("📍"):
+            ends_map = {}
+            if not df_fer.empty:
+                for _, r in df_fer.iterrows():
+                    e1 = str(r.get('enderecamento_01', '')).strip().upper()
+                    e2 = str(r.get('enderecamento_02', '')).strip().upper()
+                    if e1:
+                        ends_map[e1] = ends_map.get(e1, {'tipo': 'ENDEREÇAMENTO 01', 'lotes': 0, 'vinculo': e2})
+                        ends_map[e1]['lotes'] += 1
+                    if e2:
+                        ends_map[e2] = ends_map.get(e2, {'tipo': 'ENDEREÇAMENTO 02', 'lotes': 0, 'vinculo': f"Estante: {e1}" if e1 else ""})
+                        ends_map[e2]['lotes'] += 1
+
+            lista_op_ends = sorted(list(ends_map.keys()))
+            if not lista_op_ends:
+                st.warning("Nenhum Endereçamento 01 ou 02 preenchido na base ainda. Use a opção 3 abaixo para digitar códigos manualmente ou importe a planilha.")
+            else:
+                filtro_tipo_end = st.radio("Filtrar nível de endereço:", ["Ambos (Endereçamento 01 + 02)", "Apenas Endereçamento 01 (Estantes/Prateleiras)", "Apenas Endereçamento 02 (Caixas/Gavetas)"], horizontal=True)
+                opcoes_filtradas = [
+                    k for k in lista_op_ends
+                    if filtro_tipo_end.startswith("Ambos")
+                    or (filtro_tipo_end.startswith("Apenas Endereçamento 01") and ends_map[k]['tipo'] == 'ENDEREÇAMENTO 01')
+                    or (filtro_tipo_end.startswith("Apenas Endereçamento 02") and ends_map[k]['tipo'] == 'ENDEREÇAMENTO 02')
+                ]
+                selecionados_end = st.multiselect(
+                    f"Endereços selecionados para a folha ({len(opcoes_filtradas)} encontrados):",
+                    options=opcoes_filtradas,
+                    default=opcoes_filtradas
                 )
+                for cod_e in selecionados_end:
+                    info_e = ends_map[cod_e]
+                    etiquetas_para_gerar.append({
+                        'codigo': cod_e,
+                        'tipo': info_e['tipo'],
+                        'subtitulo': f"{info_e['vinculo']} ({info_e['lotes']} lotes)".strip()
+                    })
+
+        elif modo_lote_qr.startswith("🛠️"):
+            if df_fer.empty:
+                st.warning("Nenhuma ferramenta cadastrada.")
+            else:
+                op_fer_lbl = df_fer.apply(lambda r: f"{r['id_controle']} | Cód {r['codigo_d365']} - {r['descricao_d365'] or r['descricao_ferramenta']} ({r['enderecamento_01']})", axis=1).tolist()
+                sel_fer_lbl = st.multiselect(
+                    "Selecione as Ferramentas para gerar etiquetas (Padrão: primeiros 21 itens = 1 folha A4):",
+                    options=op_fer_lbl,
+                    default=op_fer_lbl[:21]
+                )
+                for item_l in sel_fer_lbl:
+                    id_f_l = item_l.split(" | ")[0]
+                    r_f = df_fer[df_fer['id_controle'] == id_f_l].iloc[0]
+                    etiquetas_para_gerar.append({
+                        'codigo': id_f_l,
+                        'tipo': f"D365: {r_f.get('codigo_d365', '')} | {r_f.get('enderecamento_01', '')}",
+                        'subtitulo': str(r_f.get('descricao_d365') or r_f.get('descricao_ferramenta', ''))
+                    })
+
+        else:
+            txt_livre = st.text_area(
+                "Digite os códigos que deseja transformar em etiquetas QR Code (um por linha ou separados por vírgula):",
+                value="US-AC1N1P9\nUS-AC1N1P9CX1\nUS-AC1N1P9CX2"
+            )
+            sub_livre = st.text_input("Subtítulo padrão das etiquetas:", value="ALMOXARIFADO FERRAMENTAL")
+            cods_livres = [c.strip().upper() for c in txt_livre.replace(",", "\n").split("\n") if c.strip()]
+            for cl in cods_livres:
+                etiquetas_para_gerar.append({
+                    'codigo': cl,
+                    'tipo': 'ENDEREÇO / LOCAL',
+                    'subtitulo': sub_livre.strip()
+                })
+
+        if etiquetas_para_gerar:
+            qtd_folhas = (len(etiquetas_para_gerar) + 20) // 21
+            st.info(f"📄 Pronto para gerar **{len(etiquetas_para_gerar)} etiqueta(s) QR Code** distribuídas em **{qtd_folhas} folha(s) A4**.")
+            if st.button(f"🖨️ Gerar Folha de Etiquetas em PDF ({len(etiquetas_para_gerar)} etiquetas)", type="primary"):
+                with st.spinner("Montando grade de QR Codes em alta definição no PDF A4..."):
+                    caminho_pdf_qr = gerar_etiquetas_qrcode_pdf(etiquetas_para_gerar)
+                    with open(caminho_pdf_qr, "rb") as f_q:
+                        st.session_state.pdf_etiquetas_fer_pronto = {
+                            'bytes': f_q.read(),
+                            'nome': f"Folha_Etiquetas_QR_Ferramental_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                            'msg': f"✅ Folha A4 com {len(etiquetas_para_gerar)} etiquetas QR Code gerada com sucesso!"
+                        }
+                    st.rerun()
 
     exibir_marca_desenvolvedor()
 
