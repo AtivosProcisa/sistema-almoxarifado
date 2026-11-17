@@ -1,5 +1,8 @@
 import io
+import os
 import tempfile
+import urllib.request
+import urllib.parse
 from datetime import datetime
 import pandas as pd
 
@@ -94,7 +97,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     nf_procisa = ""
     total_itens = len(info_ativo)
     
-    # Item 09: Inclui automaticamente quantos itens forem necessários, criando novas páginas se passar do limite vertical
     for idx, reg_ativo in info_ativo.reset_index(drop=True).iterrows():
         if pdf.get_y() > 225:
             num_pagina_atual += 1
@@ -130,7 +132,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
             pdf.cell(0, 6, txt=limpar_texto_pdf(f"   CÓD D365: {cod_d365} - {desc_d365}"), ln=True)
         pdf.ln(2)
 
-    # Se tiver menos de 5 itens, completa até 5 linhas em branco para manter o padrão clássico do formulário
     if total_itens < 5:
         for i in range(total_itens + 1, 6):
             if pdf.get_y() > 235:
@@ -140,7 +141,6 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
             pdf.cell(0, 5, txt=limpar_texto_pdf("   SITUAÇÃO: ______________________________________________"), ln=True)
             pdf.ln(2)
 
-    # Garante espaço para o rodapé de assinaturas
     if pdf.get_y() > 230:
         num_pagina_atual += 1
         pdf.add_page()
@@ -164,3 +164,101 @@ def gerar_termo_pdf(patrimonio, responsavel, matricula, cpf, rg, projeto, unidad
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         pdf.output(tmp.name)
         return tmp.name
+
+# ==========================================
+# GERADOR DE FOLHA DE ETIQUETAS QR CODE EM LOTE (A4 - 21 POR PÁGINA)
+# ==========================================
+def gerar_etiquetas_qrcode_pdf(lista_etiquetas):
+    """
+    Recebe uma lista de dicionários:
+    [{'codigo': 'US-AC1N1P9', 'tipo': 'ENDEREÇO 01', 'subtitulo': 'Prateleira Almox.'}, ...]
+    Gera um arquivo PDF A4 em grade (3 colunas x 7 linhas = 21 etiquetas por folha).
+    """
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_auto_page_break(auto=False)
+
+    cols = 3
+    rows = 7
+    por_pagina = cols * rows
+    margin_x = 10.0
+    margin_y = 12.0
+    box_w = 61.0
+    box_h = 38.0
+    gap_x = 3.5
+    gap_y = 1.5
+
+    arquivos_temp = []
+
+    for idx, item in enumerate(lista_etiquetas):
+        if idx % por_pagina == 0:
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 8)
+            pdf.set_xy(10, 5)
+            pdf.cell(190, 4, txt=limpar_texto_pdf(f"PROCISA - FOLHA DE ETIQUETAS QR CODE (ALMOXARIFADO) - Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}"), align='C')
+
+        pos_pag = idx % por_pagina
+        c_idx = pos_pag % cols
+        r_idx = pos_pag // cols
+
+        x = margin_x + c_idx * (box_w + gap_x)
+        y = margin_y + r_idx * (box_h + gap_y)
+
+        codigo_qr = str(item.get('codigo', '')).strip().upper()
+        tipo_lbl = str(item.get('tipo', 'ENDEREÇO')).strip().upper()
+        sub_lbl = str(item.get('subtitulo', '')).strip()
+
+        # Moldura da etiqueta
+        pdf.set_draw_color(160, 160, 160)
+        pdf.rect(x, y, box_w, box_h)
+
+        # Faixa superior de identificação
+        pdf.set_fill_color(240, 240, 240)
+        pdf.rect(x + 0.5, y + 0.5, box_w - 1.0, 5.5, 'F')
+        pdf.set_xy(x + 1, y + 1)
+        pdf.set_font("Arial", 'B', 7)
+        pdf.cell(box_w - 2, 4.5, txt=limpar_texto_pdf(f"PROCISA | {tipo_lbl}"[:34]), align='C')
+
+        # Baixa e insere a imagem do QR Code ao lado esquerdo da etiqueta
+        try:
+            url_qr = f"https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=1&data={urllib.parse.quote(codigo_qr)}"
+            req = urllib.request.Request(url_qr, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                img_bytes = resp.read()
+            tmp_img = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp_img.write(img_bytes)
+            tmp_img.close()
+            arquivos_temp.append(tmp_img.name)
+            pdf.image(tmp_img.name, x=x + 2.0, y=y + 7.5, w=23.0, h=23.0)
+        except Exception:
+            pdf.set_xy(x + 2.0, y + 15.0)
+            pdf.set_font("Arial", 'B', 7)
+            pdf.cell(23.0, 5, txt="[QR CODE]", border=1, align='C')
+
+        # Texto principal (Código grande para leitura visual humana)
+        pdf.set_xy(x + 26.5, y + 8.5)
+        tam_fonte_cod = 10 if len(codigo_qr) <= 12 else (8.5 if len(codigo_qr) <= 16 else 7.5)
+        pdf.set_font("Arial", 'B', tam_fonte_cod)
+        pdf.multi_cell(box_w - 28.0, 4.8, txt=limpar_texto_pdf(codigo_qr))
+
+        # Subtítulo / Descrição complementar
+        if sub_lbl:
+            pdf.set_xy(x + 26.5, y + 19.5)
+            pdf.set_font("Arial", '', 6.8)
+            pdf.multi_cell(box_w - 28.0, 3.5, txt=limpar_texto_pdf(sub_lbl[:58]))
+
+        # Rodapé de instrução na base da etiqueta
+        pdf.set_xy(x + 1, y + box_h - 4.5)
+        pdf.set_font("Arial", 'I', 6)
+        pdf.cell(box_w - 2, 3.5, txt=limpar_texto_pdf("Leitura Óptica - Modo Operador"), align='R')
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+        pdf.output(tmp_pdf.name)
+        caminho_final = tmp_pdf.name
+
+    for arq in arquivos_temp:
+        try:
+            os.remove(arq)
+        except Exception:
+            pass
+
+    return caminho_final
