@@ -677,12 +677,14 @@ def render_modulo_laboratorio(df_ativos):
             st.warning("⚠️ Patrimônio ou série não localizado.")
 
 # ==========================================
-# MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE + FOLHA DE ETIQUETAS A4
+# MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE AUTOMÁTICO + FOLHA A4
 # ==========================================
 def render_operador_qrcode_eqp(df_ativos, df_empregados):
     gerar_etiquetas_qrcode_pdf = getattr(pdf_termo, 'gerar_etiquetas_qrcode_pdf', None)
-    st.subheader("📷 Modo Operador — Leitura de QR Code / Endereçamento (Equipamentos)")
-    st.caption("Bipe o QR Code / Código de Barras do Endereçamento (01/02) ou do Equipamento (Patrimônio / Nº de Série) para localizar e movimentar.")
+    render_leitor_fn = getattr(nuvem, 'render_leitor_qrcode_mobile', None)
+
+    st.subheader("📷 Modo Operador — Leitura Automática de QR Code (Equipamentos)")
+    st.caption("Ative o '📱 Scanner Ao Vivo (Auto)' no smartphone para leitura automática contínua ou utilize o coletor.")
 
     if st.session_state.get('pdf_etiquetas_eqp_pronto'):
         st.success(st.session_state.pdf_etiquetas_eqp_pronto['msg'])
@@ -699,28 +701,20 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
         st.divider()
 
     aba_sc_eqp, aba_etq_eqp = st.tabs([
-        "📡 Coletor / Scanner (Equipamentos)",
+        "📡 Coletor / Scanner Automático (Equipamentos)",
         "🏷️ Gerador de Folha de Etiquetas QR Code em Lote (PDF A4)"
     ])
 
     with aba_sc_eqp:
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            cod_eqp_qr = st.text_input(
-                "🔫 Bipe ou Digite o Código (Endereçamento 01, Endereçamento 02, Patrimônio ou Nº de Série):",
-                placeholder="Ex: US-AC1N1P9 ou Patrimônio...",
-                key="input_qr_eqp"
-            )
-        with c2:
-            cam_eqp = st.toggle("📷 Câmera", value=False, key="tog_cam_eqp")
+        if render_leitor_fn:
+            cod_eqp_qr = render_leitor_fn("eqp_qr", "Ex: US-AC1N1P9 ou Patrimônio...")
+        else:
+            cod_eqp_qr = st.text_input("🔫 Bipe ou Digite o Código:", placeholder="Ex: US-AC1N1P9 ou Patrimônio...").strip().upper()
 
-        if cam_eqp:
-            st.camera_input("Leitura Óptica (Equipamentos)", key="cam_qr_eqp")
-
-        if cod_eqp_qr.strip() and not df_ativos.empty:
+        if cod_eqp_qr and not df_ativos.empty:
             resultados = buscar_ativo(cod_eqp_qr, df_ativos)
             if not resultados.empty:
-                st.success(f"✅ **{len(resultados)} equipamento(s)** localizado(s) para o código `{cod_eqp_qr.strip().upper()}`!")
+                st.success(f"✅ **{len(resultados)} equipamento(s)** localizado(s) para o código `{cod_eqp_qr}`!")
                 cols_v = [c for c in ['patrimonio', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela', 'enderecamento_01', 'enderecamento_02'] if c in resultados.columns]
                 st.dataframe(resultados[cols_v], use_container_width=True, hide_index=True)
 
@@ -779,4 +773,4 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
                         }
                     st.rerun()
         else:
-            st.info("Base de equipamentos vazia ou módulo PDF ainda em atualização.")
+            st.info("Base de equipamentos vazia.")
