@@ -4,32 +4,22 @@ import importlib
 st.set_page_config(page_title="Gestão de Ativos e Ferramental - PROCISA", layout="wide")
 
 import nuvem
+import pdf_termo
 import operacao
 import gestor
 import ferramental
 
 importlib.reload(nuvem)
+importlib.reload(pdf_termo)
 importlib.reload(operacao)
 importlib.reload(gestor)
 importlib.reload(ferramental)
 
-from nuvem import (
-    supabase, carregar_dados, carregar_dados_ferramental,
-    registrar_log_auditoria, exibir_marca_desenvolvedor
-)
-from operacao import (
-    render_modulo_solicitacao, render_modulo_validacoes, 
-    render_modulo_termos_divergencias, render_modulo_laboratorio,
-    render_operador_qrcode_eqp
-)
-from gestor import (
-    render_modulo_dashboard, render_modulo_usuarios, render_modulo_auditoria
-)
-from ferramental import (
-    render_painel_ferramental, render_inspecao_movimentacao_fer,
-    render_cautela_ferramentas, render_manutencao_baixa_fer,
-    render_conciliacao_d365_fer, render_operador_qrcode_fer
-)
+supabase = nuvem.supabase
+carregar_dados = nuvem.carregar_dados
+carregar_dados_ferramental = nuvem.carregar_dados_ferramental
+registrar_log_auditoria = nuvem.registrar_log_auditoria
+exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
 
 if not supabase:
     st.warning("⚠️ Não foi possível estabelecer conexão com o banco de dados na nuvem.")
@@ -193,31 +183,31 @@ selecao = st.session_state.modulo_ativo
 
 if selecao:
     if selecao.startswith("1"):
-        render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados)
+        gestor.render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados)
     elif selecao.startswith("2"):
-        render_modulo_solicitacao(df_ativos, df_empregados)
+        operacao.render_modulo_solicitacao(df_ativos, df_empregados)
     elif selecao.startswith("3"):
-        render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados)
+        operacao.render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados)
     elif selecao.startswith("4"):
-        render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empregados)
+        operacao.render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empregados)
     elif selecao.startswith("5"):
-        render_modulo_laboratorio(df_ativos)
+        operacao.render_modulo_laboratorio(df_ativos)
     elif selecao.startswith("8"):
-        render_operador_qrcode_eqp(df_ativos, df_empregados)
+        operacao.render_operador_qrcode_eqp(df_ativos, df_empregados)
     elif selecao.startswith("F1"):
-        render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365)
+        ferramental.render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365)
     elif selecao.startswith("F6"):
-        render_operador_qrcode_fer(df_fer, df_empregados)
+        ferramental.render_operador_qrcode_fer(df_fer, df_empregados)
     elif selecao.startswith("F2"):
-        render_inspecao_movimentacao_fer(df_fer)
+        ferramental.render_inspecao_movimentacao_fer(df_fer)
     elif selecao.startswith("F3"):
-        render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados)
+        ferramental.render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados)
     elif selecao.startswith("F4"):
-        render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer)
+        ferramental.render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer)
     elif selecao.startswith("F5"):
-        render_conciliacao_d365_fer(df_fer, df_conc_d365)
+        ferramental.render_conciliacao_d365_fer(df_fer, df_conc_d365)
     elif selecao.startswith("6"):
-        render_modulo_usuarios(df_usuarios)
+        gestor.render_modulo_usuarios(df_usuarios)
     elif selecao.startswith("7"):
         dfs_todos = [df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados]
-        render_modulo_auditoria(*dfs_todos)
+        gestor.render_modulo_auditoria(*dfs_todos)
