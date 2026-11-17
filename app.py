@@ -1,7 +1,6 @@
 import streamlit as st
 import importlib
 
-# Configuração da página (Deve ser sempre o primeiro comando do Streamlit)
 st.set_page_config(page_title="Gestão de Ativos e Ferramental - PROCISA", layout="wide")
 
 import nuvem
@@ -9,7 +8,6 @@ import operacao
 import gestor
 import ferramental
 
-# Força o recarregamento dos módulos no servidor para evitar cache antigo do Python
 importlib.reload(nuvem)
 importlib.reload(operacao)
 importlib.reload(gestor)
@@ -21,7 +19,8 @@ from nuvem import (
 )
 from operacao import (
     render_modulo_solicitacao, render_modulo_validacoes, 
-    render_modulo_termos_divergencias, render_modulo_laboratorio
+    render_modulo_termos_divergencias, render_modulo_laboratorio,
+    render_operador_qrcode_eqp
 )
 from gestor import (
     render_modulo_dashboard, render_modulo_usuarios, render_modulo_auditoria
@@ -29,20 +28,16 @@ from gestor import (
 from ferramental import (
     render_painel_ferramental, render_inspecao_movimentacao_fer,
     render_cautela_ferramentas, render_manutencao_baixa_fer,
-    render_conciliacao_d365_fer
+    render_conciliacao_d365_fer, render_operador_qrcode_fer
 )
 
 if not supabase:
     st.warning("⚠️ Não foi possível estabelecer conexão com o banco de dados na nuvem.")
     st.stop()
 
-# Carrega dados de ambos os ambientes
 df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs, df_empregados = carregar_dados()
 df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365 = carregar_dados_ferramental()
 
-# ==========================================
-# SISTEMA DE AUTENTICAÇÃO E SESSÃO
-# ==========================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.usuario = None
@@ -81,7 +76,6 @@ def fazer_logout():
     st.session_state.msg_sucesso = None
     st.rerun()
 
-# --- TELA DE LOGIN ---
 if not st.session_state.logged_in:
     st.markdown("<h1 style='text-align: center;'>🔐 Acesso Restrito</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>Sistema Integrado de Ativos e Ferramental (NUVEM)</p>", unsafe_allow_html=True)
@@ -93,13 +87,9 @@ if not st.session_state.logged_in:
             submit_login = st.form_submit_button("Entrar no Sistema", use_container_width=True)
             if submit_login:
                 fazer_login(usuario_input, senha_input)
-        
         exibir_marca_desenvolvedor()
     st.stop()
 
-# ==========================================
-# BARRA LATERAL: SELETOR DE AMBIENTE (SEGMENTO)
-# ==========================================
 st.sidebar.title(f"Olá, {st.session_state.nome_real}")
 st.sidebar.caption(f"Perfil: {st.session_state.perfil}")
 
@@ -129,16 +119,21 @@ if segmento.startswith("📦"):
             "3. Central de Validações (Almoxarifado)", 
             "4. Gestão de Termos e Divergências (Almoxarifado)",
             "5. Diagnóstico (Laboratório)",
+            "8. 📷 Modo Operador (QR Code / Endereço)",
             "6. Gestão de Usuários (Admin)",
             "7. 🛡️ Auditoria Geral (Gestor)"
         ]
     elif st.session_state.perfil == 'Operador Campo':
-        opcoes_menu = ["2. Solicitação de Movimentação (Campo)"]
+        opcoes_menu = [
+            "2. Solicitação de Movimentação (Campo)",
+            "8. 📷 Modo Operador (QR Code / Endereço)"
+        ]
     elif st.session_state.perfil == 'Almoxarifado':
         opcoes_menu = [
             "2. Solicitação de Movimentação (Campo)", 
             "3. Central de Validações (Almoxarifado)",
-            "4. Gestão de Termos e Divergências (Almoxarifado)"
+            "4. Gestão de Termos e Divergências (Almoxarifado)",
+            "8. 📷 Modo Operador (QR Code / Endereço)"
         ]
     elif st.session_state.perfil in ['Laboratório', 'Laboratorio']:
         opcoes_menu = ["5. Diagnóstico (Laboratório)"]
@@ -147,6 +142,7 @@ else:
     if st.session_state.perfil == 'Master':
         opcoes_menu = [
             "F1. Painel & Saldo Operacional (Usados)",
+            "F6. 📷 Modo Operador (QR Code / Endereço)",
             "F2. Inspeção, Triagem e Movimentação",
             "F3. Controle de Cautela (Entrega/Devolução)",
             "F4. Manutenção, Obsolescência e Baixa",
@@ -156,12 +152,14 @@ else:
         ]
     elif st.session_state.perfil == 'Operador Campo':
         opcoes_menu = [
+            "F6. 📷 Modo Operador (QR Code / Endereço)",
             "F1. Painel & Saldo Operacional (Usados)",
             "F3. Controle de Cautela (Entrega/Devolução)"
         ]
     elif st.session_state.perfil == 'Almoxarifado':
         opcoes_menu = [
             "F1. Painel & Saldo Operacional (Usados)",
+            "F6. 📷 Modo Operador (QR Code / Endereço)",
             "F2. Inspeção, Triagem e Movimentação",
             "F3. Controle de Cautela (Entrega/Devolução)",
             "F5. Divergência D365 x Saldo Operacional"
@@ -191,9 +189,6 @@ if st.session_state.perfil == 'Master':
         unsafe_allow_html=True
     )
 
-# ==========================================
-# ROTEAMENTO DE MÓDULOS (EQUIPAMENTOS E FERRAMENTAL)
-# ==========================================
 selecao = st.session_state.modulo_ativo
 
 if selecao:
@@ -207,8 +202,12 @@ if selecao:
         render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empregados)
     elif selecao.startswith("5"):
         render_modulo_laboratorio(df_ativos)
+    elif selecao.startswith("8"):
+        render_operador_qrcode_eqp(df_ativos, df_empregados)
     elif selecao.startswith("F1"):
         render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365)
+    elif selecao.startswith("F6"):
+        render_operador_qrcode_fer(df_fer, df_empregados)
     elif selecao.startswith("F2"):
         render_inspecao_movimentacao_fer(df_fer)
     elif selecao.startswith("F3"):
