@@ -3,3 +3,5 @@ pandas
 fpdf
 supabase
 openpyxl
+opencv-python-headless
+pillow
