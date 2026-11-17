@@ -9,14 +9,42 @@ supabase = nuvem.supabase
 buscar_ativo = nuvem.buscar_ativo
 registrar_log_auditoria = nuvem.registrar_log_auditoria
 limpar_texto_matricula = nuvem.limpar_texto_matricula
+exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
 gerar_termo_pdf = pdf_termo.gerar_termo_pdf
 
+def _montar_df_pdf_equipamentos(df_ativos_selecionados, coord_padrao="", nf_padrao=""):
+    """Prepara o DataFrame padronizado para o gerador de PDF elástico (idêntico ao Ferramental)."""
+    linhas_pdf = []
+    for _, r in df_ativos_selecionados.iterrows():
+        marca = str(r.get('marca', '')).strip()
+        modelo = str(r.get('modelo', '')).strip()
+        serie = str(r.get('numero_serie', '')).strip()
+        pat = str(r.get('patrimonio', '')).strip()
+        cond = str(r.get('condicoes_para_uso', 'APTO')).strip() or "APTO"
+        acess = str(r.get('acessorios', '')).strip()
+        cod_item = str(r.get('item', '')).strip()
+        eqp_desc = str(r.get('equipamento', '')).strip()
+
+        linhas_pdf.append({
+            'marca': marca,
+            'modelo': modelo,
+            'numero_serie': serie,
+            'patrimonio': pat,
+            'condicoes_para_uso': cond,
+            'acessorios': acess,
+            'codigo_d365': cod_item if cod_item else pat,
+            'descricao_d365': eqp_desc,
+            'coordenacao': str(r.get('coordenacao', coord_padrao)).strip() or coord_padrao,
+            'nf_procisa': str(r.get('nf_procisa', nf_padrao)).strip() or nf_padrao
+        })
+    return pd.DataFrame(linhas_pdf)
+
 # ==========================================
-# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO
+# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (MÚLTIPLOS ATIVOS ESTILO PROCV)
 # ==========================================
 def render_modulo_solicitacao(df_ativos, df_empregados):
-    st.header("📝 Solicitação de Movimentação")
-    st.write("Selecione a modalidade e identifique o ativo. Os dados de destino são preenchidos automaticamente conforme o tipo escolhido.")
+    st.subheader("📝 Solicitação de Movimentação de Equipamentos (Individual ou Múltiplos Itens)")
+    st.caption("Selecione a modalidade e busque um ou vários equipamentos (estilo PROCV). Os dados de destino são preenchidos automaticamente.")
     
     opcoes_mov = [
         "MOV-01 | Almoxarifado -> Colaborador", 
@@ -30,14 +58,34 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
-        patrimonio_busca = st.text_input("2️⃣ Digite o Patrimônio ou Nº de Série (Ativo):")
+        if not df_ativos.empty:
+            opcoes_ativos = df_ativos.apply(
+                lambda r: f"Pat: {r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} | Série: {r.get('numero_serie','')} | Status: {r.get('status_sistema','')} [PAT: {r['patrimonio']}]",
+                axis=1
+            ).tolist()
+        else:
+            opcoes_ativos = []
+
+        ativos_selecionados_str = st.multiselect(
+            "2️⃣ Busque e Selecione o(s) Equipamento(s) (Patrimônio, Série ou Descrição):",
+            options=opcoes_ativos
+        )
     
     matricula_busca = ""
     unidade_escolhida = ""
+    emp_dict = {}
     
     with col_b2:
         if cod_tipo == "MOV-01":
-            matricula_busca = st.text_input("3️⃣ Digite a Matrícula do Colaborador (Destino):")
+            matricula_busca = st.text_input("3️⃣ Digite a Matrícula do Colaborador (Destino) e pressione Enter:")
+            mat_limpa = limpar_texto_matricula(matricula_busca)
+            if mat_limpa and not df_empregados.empty:
+                match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
+                if not match_emp.empty:
+                    emp_dict = match_emp.iloc[0].fillna("").to_dict()
+                    st.success(f"👤 **Colaborador:** {emp_dict.get('nome', '')} | Proj: {emp_dict.get('projeto', '')} | Coord: {emp_dict.get('unidade', '')}")
+                else:
+                    st.warning("⚠️ Matrícula não localizada na base. Preencha abaixo.")
         elif cod_tipo == "MOV-03":
             unidades_existentes = []
             if not df_empregados.empty and 'unidade' in df_empregados.columns:
@@ -52,47 +100,27 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             else:
                 unidade_escolhida = sel_unid
         else:
-            st.info(f"⚡ **Auto-Preenchimento Ativo:** Os dados de destino para **{tipo_mov.split('->')[1].strip()}** serão preenchidos automaticamente.")
+            st.info(f"⚡ **Auto-Preenchimento Ativo:** Destino configurado automaticamente para **{tipo_mov.split('->')[1].strip()}**.")
 
-    ativo_info = pd.DataFrame()
-    emp_dict = {}
-    
-    if patrimonio_busca:
-        ativo_info = buscar_ativo(patrimonio_busca, df_ativos)
-        if not ativo_info.empty:
-            registro_atual = ativo_info.iloc[0].to_dict()
-            pat_real = registro_atual.get('patrimonio', '')
-            eqp = registro_atual.get('equipamento', '')
-            marca = registro_atual.get('marca', '')
-            modelo = registro_atual.get('modelo', '')
-            serie = registro_atual.get('numero_serie', '')
-            status_atual = registro_atual.get('status_sistema', 'Disponível')
-            cautela_atual = registro_atual.get('cautela', '')
-            nf_atual = registro_atual.get('nf_procisa', '')
-            
-            st.success(f"✅ **Ativo Localizado:** {eqp} - {marca} {modelo} (Série: {serie})")
-            st.info(f"📍 **Status:** {status_atual} | **Cautela/Local Atual:** {cautela_atual}")
-        else:
-            st.warning("⚠️ Ativo não localizado na base mestra.")
-            
-    if matricula_busca and cod_tipo == "MOV-01":
-        mat_limpa = limpar_texto_matricula(matricula_busca)
-        if not df_empregados.empty and mat_limpa:
-            match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
-            if not match_emp.empty:
-                emp_dict = match_emp.iloc[0].fillna("").to_dict()
-                st.success(f"👤 **Colaborador Localizado:** {emp_dict.get('nome', '')} | Projeto: {emp_dict.get('projeto', '')} | Coordenação: {emp_dict.get('unidade', '')}")
-            else:
-                st.warning("⚠️ Matrícula não encontrada na base. Preencha manualmente abaixo.")
-    
-    if not ativo_info.empty:
-        origem_auto = str(cautela_atual) if cautela_atual else "ALMOXARIFADO CENTRAL"
+    if ativos_selecionados_str:
+        pats_escolhidos = [s.split("[PAT: ")[1].replace("]", "") for s in ativos_selecionados_str]
+        df_sel_ativos = df_ativos[df_ativos['patrimonio'].isin(pats_escolhidos)].copy()
+        primeiro_reg = df_sel_ativos.iloc[0].to_dict()
+
+        st.markdown(f"###### 📦 {len(df_sel_ativos)} Equipamento(s) Selecionado(s) para o Lote:")
+        st.dataframe(
+            df_sel_ativos[['patrimonio', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela']],
+            use_container_width=True, hide_index=True
+        )
+
+        cautela_atual = str(primeiro_reg.get('cautela', ''))
+        origem_auto = cautela_atual if cautela_atual else "ALMOXARIFADO CENTRAL"
         
         if cod_tipo == "MOV-01":
             origem_auto = "ALMOXARIFADO CENTRAL"
             destino_auto = emp_dict.get('nome', '')
-            projeto_auto = emp_dict.get('projeto', registro_atual.get('projeto', ''))
-            coord_auto = emp_dict.get('unidade', registro_atual.get('coordenacao', ''))
+            projeto_auto = emp_dict.get('projeto', primeiro_reg.get('projeto', ''))
+            coord_auto = emp_dict.get('unidade', primeiro_reg.get('coordenacao', ''))
             mat_auto = limpar_texto_matricula(matricula_busca)
         elif cod_tipo in ["MOV-02", "MOV-05"]:
             if cod_tipo == "MOV-05":
@@ -102,14 +130,13 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             coord_auto = "LOGÍSTICA / ALMOXARIFADO"
             mat_auto = ""
         elif cod_tipo == "MOV-04":
-            origem_auto = str(cautela_atual) if cautela_atual else "ALMOXARIFADO CENTRAL"
             destino_auto = "LABORATÓRIO TÉCNICO - PROCISA"
             projeto_auto = "MANUTENÇÃO / LAB"
             coord_auto = "LABORATÓRIO"
             mat_auto = ""
         elif cod_tipo == "MOV-03":
             destino_auto = unidade_escolhida
-            proj_unid = registro_atual.get('projeto', '')
+            proj_unid = primeiro_reg.get('projeto', '')
             if unidade_escolhida and not df_empregados.empty:
                 m_u = df_empregados[df_empregados['unidade'].astype(str).str.upper() == unidade_escolhida.upper()]
                 if not m_u.empty:
@@ -118,15 +145,14 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             coord_auto = unidade_escolhida
             mat_auto = ""
 
-        with st.form("form_solicitacao"):
-            st.markdown("###### Confirme os detalhes da destinação (Preenchidos Automaticamente):")
-            
+        with st.form("form_solicitacao_multipla"):
+            st.markdown("###### Confirme os detalhes da destinação do lote:")
             c1, c2, c3 = st.columns(3)
             with c1:
                 st.text_input("Modalidade Selecionada", value=tipo_mov, disabled=True)
-                origem = st.text_input("Origem (Local Atual)", value=origem_auto)
+                origem = st.text_input("Origem Padrão", value=origem_auto)
             with c2:
-                destino = st.text_input("Destino / Novo Responsável", value=destino_auto)
+                destino = st.text_input("Destino / Novo Responsável *", value=destino_auto)
                 projeto = st.text_input("Projeto (Destino)", value=projeto_auto)
             with c3:
                 coordenacao = st.text_input("Coordenação / Unidade (Destino)", value=coord_auto)
@@ -134,50 +160,59 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                 
             c4, c5 = st.columns(2)
             with c4:
-                nf_edit = st.text_input("Nota Fiscal / NF Procisa", value=nf_atual)
+                nf_edit = st.text_input("Nota Fiscal / NF Procisa (Opcional)", value=str(primeiro_reg.get('nf_procisa', '')))
             with c5:
                 data_mov = st.date_input("Data da Movimentação (Efetiva)", datetime.today())
             
-            if st.form_submit_button("🚀 Registrar Solicitação", type="primary"):
+            if st.form_submit_button(f"🚀 Registrar Solicitação para {len(df_sel_ativos)} Equipamento(s)", type="primary"):
                 if destino.strip():
-                    id_mov = f"MOV-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                    stamp_lote = datetime.now().strftime('%Y%m%d-%H%M%S')
+                    agora_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     mat_salvar = limpar_texto_matricula(matricula_col)
-                    nova_mov = {
-                        'id_mov': id_mov, 
-                        'data_hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
-                        'tipo_mov': cod_tipo, 
-                        'patrimonio': pat_real, 
-                        'origem': origem.strip(), 
-                        'destino': destino.strip(), 
-                        'solicitante': st.session_state.get('nome_real', destino.strip()),
-                        'matricula_solicitante': mat_salvar,
-                        'autorizador': 'Pendente', 
-                        'status_mov': 'Aguardando Conferência',
-                        'nf_procisa': nf_edit.strip(),
-                        'projeto': projeto.strip(),
-                        'coordenacao': coordenacao.strip(),
-                        'data_efetiva': data_mov.strftime('%Y-%m-%d')
-                    }
+                    novas_movs = []
+
+                    for idx_m, (_, row_at) in enumerate(df_sel_ativos.iterrows(), start=1):
+                        pat_item = str(row_at['patrimonio']).strip()
+                        id_mov_item = f"MOV-{stamp_lote}-{idx_m:02d}"
+                        orig_item = origem.strip() if len(df_sel_ativos) == 1 else (str(row_at.get('cautela', '')).strip() or origem.strip())
+                        novas_movs.append({
+                            'id_mov': id_mov_item, 
+                            'data_hora': agora_str, 
+                            'tipo_mov': cod_tipo, 
+                            'patrimonio': pat_item, 
+                            'origem': orig_item, 
+                            'destino': destino.strip(), 
+                            'solicitante': st.session_state.get('nome_real', destino.strip()),
+                            'matricula_solicitante': mat_salvar,
+                            'autorizador': 'Pendente', 
+                            'status_mov': 'Aguardando Conferência',
+                            'nf_procisa': nf_edit.strip(),
+                            'projeto': projeto.strip(),
+                            'coordenacao': coordenacao.strip(),
+                            'data_efetiva': data_mov.strftime('%Y-%m-%d')
+                        })
                     
                     try:
-                        supabase.table('movimentacoes').insert(nova_mov).execute()
+                        supabase.table('movimentacoes').insert(novas_movs).execute()
                         st.cache_data.clear()
                         registrar_log_auditoria(
-                            "SOLICITAÇÃO MOV.", 
-                            pat_real, 
-                            f"ID {id_mov} ({cod_tipo}) registrada. Origem: {origem} -> Destino: {destino}."
+                            "SOLICITAÇÃO EM LOTE", 
+                            f"{len(novas_movs)} ativos", 
+                            f"Lote MOV-{stamp_lote} ({cod_tipo}) registrado para Destino: {destino.strip()}."
                         )
-                        st.success("✅ Solicitação integrada à base e enviada para a fila da Central de Validações!")
+                        st.success(f"✅ {len(novas_movs)} equipamento(s) enviado(s) para a fila da Central de Validações!")
                     except Exception as e:
-                        st.error(f"Erro ao salvar solicitação: {e}")
+                        st.error(f"Erro ao salvar solicitação em lote: {e}")
                 else:
                     st.error("O campo de Destino / Novo Responsável deve estar preenchido.")
 
+    exibir_marca_desenvolvedor()
+
 # ==========================================
-# MÓDULO 3: CENTRAL DE VALIDAÇÕES
+# MÓDULO 3: CENTRAL DE VALIDAÇÕES (SUPORTE A LOTE E INDIVIDUAL)
 # ==========================================
 def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
-    st.header("✅ Central de Validações (Almoxarifado)")
+    st.subheader("✅ Central de Validações (Almoxarifado)")
     
     if st.session_state.get('msg_sucesso'):
         st.success(st.session_state.msg_sucesso)
@@ -186,14 +221,14 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
             st.rerun()
         st.divider()
     
-    movs_pendentes = df_mov[df_mov['status_mov'] == 'Aguardando Conferência'] if not df_mov.empty else pd.DataFrame()
+    movs_pendentes = df_mov[df_mov['status_mov'] == 'Aguardando Conferência'].copy() if not df_mov.empty else pd.DataFrame()
     
     if movs_pendentes.empty:
         st.success("🎉 Excelente! Nenhuma solicitação pendente no momento.")
     else:
-        st.write("Abaixo estão as solicitações pendentes. Se necessitar cancelar algum pedido errado, marque a caixinha **'🗑️ Cancelar?'**. Caso contrário, selecione o ID abaixo da tabela para **Validá-lo**.")
+        st.caption("Marque a caixinha **'🗑️ Cancelar?'** caso precise excluir solicitações indevidas, ou valide abaixo por Lote / Individual.")
         
-        df_mov_view = movs_pendentes[['id_mov', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante']].copy()
+        df_mov_view = movs_pendentes[['id_mov', 'data_hora', 'tipo_mov', 'patrimonio', 'origem', 'destino', 'solicitante', 'matricula_solicitante']].copy()
         df_mov_view.insert(0, "Excluir", False)
         
         df_mov_editado = st.data_editor(
@@ -220,105 +255,118 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
                     st.error(f"Erro ao cancelar: {e}")
         
         st.divider()
-        st.markdown("###### 🔄 Proceder com a Validação")
-        id_selecionado = st.selectbox("Selecione o ID da Movimentação para Validar:", movs_pendentes['id_mov'].tolist())
-        
-        if id_selecionado:
-            mov_atual = movs_pendentes[movs_pendentes['id_mov'] == id_selecionado].iloc[0].to_dict()
-            pat_real = mov_atual.get('patrimonio', '')
-            tipo_m = str(mov_atual.get('tipo_mov', ''))
-            ativo_info = buscar_ativo(pat_real, df_ativos)
-            
-            if not ativo_info.empty:
-                registro_atual = ativo_info.iloc[0].to_dict()
-                status_antigo = registro_atual.get('status_sistema', 'Disponível')
-                
-                st.info(f"**Ativo Vinculado:** {registro_atual.get('marca', '')} {registro_atual.get('modelo', '')} (Série: {registro_atual.get('numero_serie', '')}) | **Status Atual:** {status_antigo}")
-                
-                opcoes_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"]
-                if tipo_m in ["MOV-02", "MOV-05"] or 'ALMOX' in str(mov_atual.get('destino', '')).upper():
-                    idx_sugerido = 0
-                elif tipo_m == "MOV-04" or 'LAB' in str(mov_atual.get('destino', '')).upper():
-                    idx_sugerido = 2
-                else:
-                    idx_sugerido = 1
-                
-                with st.form("form_validacao_pendente"):
-                    colA, colB = st.columns(2)
-                    with colA: 
-                        novo_status = st.selectbox("Novo Status no Sistema:", opcoes_st, index=idx_sugerido)
-                    with colB: 
-                        nova_cautela = st.text_input("Atualizar Cautela (Destino Real)", value=str(mov_atual.get('destino', '')))
-                    
-                    st.write("Verificações de Segurança:")
-                    d365_ok = st.checkbox("Status e Localização conferem no sistema central?")
-                    eponto_ok = st.checkbox("Movimentação validada no e-Ponto?")
-                    fisico_ok = st.checkbox("Estado físico, Série e Acessórios conferem?")
-                    
-                    btn_validar = st.form_submit_button("✅ Validar e Concluir Transferência", type="primary")
-                    
-                    if btn_validar:
-                        if d365_ok and eponto_ok and fisico_ok:
-                            try:
-                                dados_update_ativo = {
+        st.markdown("###### 🔄 Proceder com a Validação (Agrupada por Lote/Destinatário ou Individual)")
+
+        # Extrai o prefixo do lote (ex: MOV-20261117-120000) ou agrupa por Destino + Tipo
+        def _extrair_chave_lote(row):
+            idm = str(row.get('id_mov', ''))
+            partes = idm.split('-')
+            if len(partes) >= 3:
+                return f"{partes[0]}-{partes[1]}-{partes[2]} | {row.get('tipo_mov')} -> {row.get('destino')} ({row.get('matricula_solicitante')})"
+            return f"{idm} | {row.get('tipo_mov')} -> {row.get('destino')}"
+
+        movs_pendentes['chave_lote'] = movs_pendentes.apply(_extrair_chave_lote, axis=1)
+        lotes_disp = movs_pendentes['chave_lote'].unique().tolist()
+
+        modo_val = st.radio("Modo de Validação:", ["📦 Validar Lote Completo (Múltiplos Itens do Mesmo Pedido)", "🔍 Validar Item Individual"], horizontal=True)
+
+        if modo_val.startswith("📦"):
+            lote_escolhido = st.selectbox("Selecione o Lote Pendente:", lotes_disp)
+            df_lote_atual = movs_pendentes[movs_pendentes['chave_lote'] == lote_escolhido].copy()
+        else:
+            id_ind = st.selectbox("Selecione o ID da Movimentação:", movs_pendentes['id_mov'].tolist())
+            df_lote_atual = movs_pendentes[movs_pendentes['id_mov'] == id_ind].copy()
+
+        if not df_lote_atual.empty:
+            mov_ref = df_lote_atual.iloc[0].to_dict()
+            tipo_m = str(mov_ref.get('tipo_mov', ''))
+            pats_lote = df_lote_atual['patrimonio'].astype(str).tolist()
+            st.info(f"**Itens neste processo ({len(pats_lote)}):** `{', '.join(pats_lote)}` | **Destino:** {mov_ref.get('destino', '')}")
+
+            opcoes_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"]
+            if tipo_m in ["MOV-02", "MOV-05"] or 'ALMOX' in str(mov_ref.get('destino', '')).upper():
+                idx_sugerido = 0
+            elif tipo_m == "MOV-04" or 'LAB' in str(mov_ref.get('destino', '')).upper():
+                idx_sugerido = 2
+            else:
+                idx_sugerido = 1
+
+            with st.form("form_validacao_lote"):
+                colA, colB = st.columns(2)
+                with colA:
+                    novo_status = st.selectbox("Novo Status no Sistema:", opcoes_st, index=idx_sugerido)
+                with colB:
+                    nova_cautela = st.text_input("Atualizar Cautela (Destino Real)", value=str(mov_ref.get('destino', '')))
+
+                st.write("Verificações de Segurança:")
+                d365_ok = st.checkbox("Status e Localização conferem no sistema central?")
+                eponto_ok = st.checkbox("Movimentação validada no e-Ponto?")
+                fisico_ok = st.checkbox("Estado físico, Série e Acessórios conferem?")
+
+                if st.form_submit_button(f"✅ Validar e Concluir Transferência ({len(df_lote_atual)} item/itens)", type="primary"):
+                    if d365_ok and eponto_ok and fisico_ok:
+                        try:
+                            stamp_trm = datetime.now().strftime('%Y%m%d%H%M%S')
+                            termos_inserir = []
+
+                            for idx_v, (_, m_row) in enumerate(df_lote_atual.iterrows(), start=1):
+                                pat_i = str(m_row['patrimonio']).strip()
+                                id_m_i = str(m_row['id_mov']).strip()
+
+                                supabase.table('ativos_master').update({
                                     'status_sistema': novo_status,
                                     'cautela': nova_cautela.strip(),
-                                    'projeto': str(mov_atual.get('projeto', '')).strip(),
-                                    'coordenacao': str(mov_atual.get('coordenacao', '')).strip(),
-                                    'nf_procisa': str(mov_atual.get('nf_procisa', '')).strip(),
-                                    'atualizado_em': str(mov_atual.get('data_efetiva', datetime.now().strftime('%Y-%m-%d'))).strip()
-                                }
-                                supabase.table('ativos_master').update(dados_update_ativo).eq('patrimonio', pat_real).execute()
-                                
-                                dados_update_mov = {'status_mov': 'Concluído', 'autorizador': st.session_state.nome_real}
-                                supabase.table('movimentacoes').update(dados_update_mov).eq('id_mov', id_selecionado).execute()
-                                
+                                    'projeto': str(m_row.get('projeto', '')).strip(),
+                                    'coordenacao': str(m_row.get('coordenacao', '')).strip(),
+                                    'nf_procisa': str(m_row.get('nf_procisa', '')).strip(),
+                                    'atualizado_em': str(m_row.get('data_efetiva', datetime.now().strftime('%Y-%m-%d'))).strip()
+                                }).eq('patrimonio', pat_i).execute()
+
+                                supabase.table('movimentacoes').update({
+                                    'status_mov': 'Concluído',
+                                    'autorizador': st.session_state.nome_real
+                                }).eq('id_mov', id_m_i).execute()
+
                                 if tipo_m.startswith("MOV-01"):
-                                    mat_solic = limpar_texto_matricula(mov_atual.get('matricula_solicitante', ''))
+                                    mat_solic = limpar_texto_matricula(m_row.get('matricula_solicitante', ''))
                                     match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_solic] if (not df_empregados.empty and mat_solic) else pd.DataFrame()
                                     emp = match_emp.iloc[0].fillna("").to_dict() if not match_emp.empty else {}
-                                    
-                                    resp_nome = emp.get('nome', mov_atual.get('destino', ''))
-                                    resp_unid = emp.get('unidade', mov_atual.get('coordenacao', ''))
-                                    
-                                    id_termo = f"TRM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                                    novo_termo = {
-                                        'id_termo': id_termo, 
-                                        'patrimonio': pat_real, 
-                                        'responsavel': resp_nome, 
-                                        'matricula': mat_solic, 
-                                        'unidade': resp_unid, 
-                                        'data_emissao': datetime.now().strftime('%Y-%m-%d'), 
-                                        'data_baixa': '', 
+                                    resp_nome = emp.get('nome', nova_cautela.strip())
+                                    resp_unid = emp.get('unidade', m_row.get('coordenacao', ''))
+
+                                    termos_inserir.append({
+                                        'id_termo': f"TRM-{stamp_trm}-{idx_v:02d}",
+                                        'patrimonio': pat_i,
+                                        'responsavel': resp_nome,
+                                        'matricula': mat_solic,
+                                        'unidade': resp_unid,
+                                        'data_emissao': datetime.now().strftime('%Y-%m-%d'),
+                                        'data_baixa': '',
                                         'status_termo': 'Pendente Impressão'
-                                    }
-                                    supabase.table('termos').insert(novo_termo).execute()
-                                    registrar_log_auditoria("TERMO NA FILA", pat_real, f"Termo {id_termo} gerado e enviado para Fila de Impressão.")
-                                    st.session_state.msg_sucesso = "✅ Validação concluída! O Termo de Responsabilidade foi enviado para a Fila de Impressão (Módulo 4)."
-                                
-                                elif tipo_m.startswith("MOV-02"):
-                                    termos_abertos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
-                                    if not termos_abertos.empty:
-                                        for _, t_row in termos_abertos.iterrows():
-                                            supabase.table('termos').update({
-                                                'data_baixa': datetime.now().strftime('%Y-%m-%d'),
-                                                'status_termo': 'Encerrado'
-                                            }).eq('id_termo', t_row['id_termo']).execute()
-                                        registrar_log_auditoria("BAIXA AUTOMÁTICA TERMO", pat_real, "Termo encerrado automaticamente na validação de devolução (MOV-02).")
-                                    st.session_state.msg_sucesso = "✅ Devolução validada! Ativo disponível no Almoxarifado e Termo anterior baixado automaticamente."
-                                else:
-                                    st.session_state.msg_sucesso = "✅ Ciclo de movimentação fechado! Dashboard atualizado em tempo real."
-                                
-                                st.cache_data.clear()
-                                registrar_log_auditoria("VALIDAÇÃO CONCLUÍDA", pat_real, f"Mov. {id_selecionado} concluída. Cautela atual: {nova_cautela}.")
-                                st.rerun()
-                                
-                            except Exception as e:
-                                st.error(f"Erro ao concluir movimentação: {e}")
-                        else:
-                            st.error("Complete as 3 caixas de verificação antes de validar.")
-            else:
-                st.warning("⚠️ Patrimônio vinculado não foi localizado na base mestra.")
+                                    })
+                                elif tipo_m.startswith("MOV-02") and not df_termos.empty:
+                                    termos_abertos = df_termos[(df_termos['patrimonio'].astype(str) == pat_i) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))]
+                                    for _, t_row in termos_abertos.iterrows():
+                                        supabase.table('termos').update({
+                                            'data_baixa': datetime.now().strftime('%Y-%m-%d'),
+                                            'status_termo': 'Encerrado'
+                                        }).eq('id_termo', t_row['id_termo']).execute()
+
+                            if termos_inserir:
+                                supabase.table('termos').insert(termos_inserir).execute()
+                                st.session_state.msg_sucesso = f"✅ {len(termos_inserir)} equipamento(s) validado(s)! O Lote de Termos (`TRM-{stamp_trm}`) foi enviado para a Fila de Impressão (Módulo 4)."
+                            elif tipo_m.startswith("MOV-02"):
+                                st.session_state.msg_sucesso = f"✅ Devolução de {len(df_lote_atual)} equipamento(s) validada e termos baixados automaticamente!"
+                            else:
+                                st.session_state.msg_sucesso = f"✅ Transferência de {len(df_lote_atual)} equipamento(s) concluída!"
+
+                            registrar_log_auditoria("VALIDAÇÃO LOTE", f"{len(df_lote_atual)} itens", f"Validado para Cautela: {nova_cautela.strip()}")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao concluir validação: {e}")
+                    else:
+                        st.error("Complete as 3 caixas de verificação antes de validar.")
 
     st.divider()
     with st.expander("🛠️ Movimentação Avulsa (Excepcional / Sem solicitação prévia)"):
@@ -353,16 +401,18 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
             else:
                 st.warning("Não encontrado.")
 
+    exibir_marca_desenvolvedor()
+
 # ==========================================
-# MÓDULO 4: GESTÃO DE TERMOS E DIVERGÊNCIAS
+# MÓDULO 4: GESTÃO DE TERMOS E DIVERGÊNCIAS (COM PDF MULTI-ITENS E 2ª VIA DINÂMICA)
 # ==========================================
 def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empregados):
-    st.header("📄 Gestão de Termos e Divergências")
+    st.subheader("📄 Gestão de Termos (PDF Multi-Equipamentos) e Divergências")
     
     if st.session_state.get('pdf_termo_pronto'):
         st.success(st.session_state.pdf_termo_pronto.get('msg', "✅ Termo gerado com sucesso!"))
         st.download_button(
-            label="📥 Baixar Termo PDF (Modelo Oficial PROCISA)", 
+            label="📥 Baixar Termo PDF (Modelo Oficial PROCISA FR-RH-P-026)", 
             data=st.session_state.pdf_termo_pronto['bytes'], 
             file_name=st.session_state.pdf_termo_pronto['nome_arquivo'], 
             mime='application/pdf',
@@ -373,199 +423,219 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
             st.rerun()
         st.divider()
 
-    aba_termos, aba_diverg = st.tabs(["Emissão, Fila e 2ª Via de Termos", "Tratar Divergências"])
+    aba_fila, aba_reimp, aba_avulso, aba_diverg = st.tabs([
+        "🖨️ Fila de Impressão (Termos Pendentes)",
+        "🔄 Termos Emitidos (Reimpressão 2ª Via)",
+        "➕ Emitir Termo Multi-Itens / Baixar Termo",
+        "🚨 Tratar Divergências"
+    ])
     
-    with aba_termos:
-        st.markdown("###### 🖨️ Fila de Impressão (Termos Pendentes)")
-        st.caption("Termos gerados automaticamente pelas Movimentações (MOV-01) que aguardam impressão e assinatura.")
-        termos_pendentes = df_termos[df_termos['status_termo'] == 'Pendente Impressão'] if not df_termos.empty else pd.DataFrame()
+    # --- SUB-ABA 0: FILA DE IMPRESSÃO CONSOLIDADA POR LOTE / COLABORADOR ---
+    with aba_fila:
+        st.caption("Termos gerados pelas validações (MOV-01). Lotes do mesmo colaborador são agrupados automaticamente num único PDF.")
+        termos_pendentes = df_termos[df_termos['status_termo'] == 'Pendente Impressão'].copy() if not df_termos.empty else pd.DataFrame()
         
         if not termos_pendentes.empty:
-            st.dataframe(termos_pendentes[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao']], use_container_width=True)
+            def _grupo_fila(row):
+                idt = str(row.get('id_termo', ''))
+                partes = idt.split('-')
+                prefixo = f"{partes[0]}-{partes[1]}" if len(partes) >= 2 else idt
+                return f"{prefixo} | {row.get('responsavel', '')} (Mat: {row.get('matricula', '')}) | Data: {row.get('data_emissao', '')}"
+
+            termos_pendentes['grupo_imp'] = termos_pendentes.apply(_grupo_fila, axis=1)
+            grupos_pendentes = termos_pendentes['grupo_imp'].unique().tolist()
+
+            st.dataframe(termos_pendentes[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao']], use_container_width=True, hide_index=True)
             
             col_f1, col_f2 = st.columns([3, 1])
             with col_f1:
-                id_imp = st.selectbox("Selecione o Termo da Fila para Imprimir:", termos_pendentes['id_termo'].tolist())
+                grupo_sel = st.selectbox("Selecione o Lote / Colaborador da Fila para Imprimir:", grupos_pendentes)
             with col_f2:
                 st.write("")
                 st.write("")
-                if st.button("🖨️ Gerar PDF e Ativar", type="primary", use_container_width=True):
-                    t_info = termos_pendentes[termos_pendentes['id_termo'] == id_imp].iloc[0]
-                    pat_real = t_info['patrimonio']
+                if st.button("🖨️ Gerar PDF Único e Ativar", type="primary", use_container_width=True):
+                    df_sub_fila = termos_pendentes[termos_pendentes['grupo_imp'] == grupo_sel]
+                    t_info = df_sub_fila.iloc[0]
+                    pats_fila = df_sub_fila['patrimonio'].astype(str).tolist()
                     mat = limpar_texto_matricula(t_info['matricula'])
                     
-                    ativo_match = buscar_ativo(pat_real, df_ativos)
+                    ativos_match = df_ativos[df_ativos['patrimonio'].isin(pats_fila)] if not df_ativos.empty else pd.DataFrame()
                     emp_match = df_empregados[df_empregados['matricula'].astype(str) == mat] if (not df_empregados.empty and mat) else pd.DataFrame()
                     
-                    if not ativo_match.empty:
+                    if not ativos_match.empty:
                         emp = emp_match.iloc[0].fillna("").to_dict() if not emp_match.empty else {}
                         resp_nome = t_info['responsavel']
                         resp_cpf = emp.get('cpf', '')
                         resp_rg = emp.get('rg', '')
-                        resp_proj = emp.get('projeto', ativo_match.iloc[0].get('projeto', ''))
+                        resp_proj = emp.get('projeto', ativos_match.iloc[0].get('projeto', ''))
                         resp_unid = t_info['unidade']
                         
-                        caminho_pdf = gerar_termo_pdf(pat_real, resp_nome, mat, resp_cpf, resp_rg, resp_proj, resp_unid, ativo_match)
+                        df_pdf_pronto = _montar_df_pdf_equipamentos(ativos_match, resp_unid, str(t_info['id_termo']))
+                        caminho_pdf = gerar_termo_pdf(pats_fila[0], resp_nome, mat, resp_cpf, resp_rg, resp_proj, resp_unid, df_pdf_pronto)
                         with open(caminho_pdf, "rb") as pdf_file: 
                             PDFbyte = pdf_file.read()
                         
                         try:
-                            supabase.table('termos').update({'status_termo': 'Ativo'}).eq('id_termo', id_imp).execute()
+                            for id_t_up in df_sub_fila['id_termo'].tolist():
+                                supabase.table('termos').update({'status_termo': 'Ativo'}).eq('id_termo', id_t_up).execute()
                             st.cache_data.clear()
-                            registrar_log_auditoria("IMPRESSÃO TERMO FILA", pat_real, f"Termo {id_imp} impresso e ativado.")
+                            registrar_log_auditoria("IMPRESSÃO TERMO FILA", f"{len(pats_fila)} ativos", f"Termo impresso e ativado para {resp_nome}.")
                             
                             st.session_state.pdf_termo_pronto = {
                                 'bytes': PDFbyte,
-                                'nome_arquivo': f"Termo_PROCISA_{pat_real}.pdf",
-                                'msg': f"✅ Termo {id_imp} gerado e ativado no sistema! Clique abaixo para baixar."
+                                'nome_arquivo': f"Termo_PROCISA_{resp_nome.replace(' ', '_')}_{pats_fila[0]}.pdf",
+                                'msg': f"✅ Termo com {len(pats_fila)} equipamento(s) gerado e ativado no sistema! Clique abaixo para baixar."
                             }
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao atualizar status: {e}")
                     else:
-                        st.error("Erro: Ativo vinculado a este termo não encontrado na base.")
+                        st.error("Erro: Equipamento(s) vinculado(s) não encontrado(s) na base.")
         else:
             st.success("🎉 Nenhum termo pendente na fila de impressão.")
-            
-        st.divider()
 
-        opcao_termo = st.radio(
-            "Outras Operações de Termos:", 
-            ["Encerrar Termo (Devolução)", "🔄 Emitir 2ª Via de Termo", "Emitir Novo Termo Excepcional"], 
-            horizontal=True
-        )
-        
-        if opcao_termo == "Emitir Novo Termo Excepcional":
-            matricula_busca = st.text_input("Digite a Matrícula e pressione Enter para buscar os dados do colaborador:")
-            mat_limpa = limpar_texto_matricula(matricula_busca)
-            
-            emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
-            if mat_limpa and not df_empregados.empty:
-                match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
-                if not match_emp.empty:
-                    emp_dict = match_emp.iloc[0].fillna("").to_dict()
-                    st.success(f"✅ Colaborador localizado: {emp_dict.get('nome', '')}")
+    # --- SUB-ABA 1: REIMPRESSÃO DINÂMICA DE TERMOS EMITIDOS (SEM ARMAZENAR ARQUIVO) ---
+    with aba_reimp:
+        st.markdown("###### 🔄 Central de Reimpressão de Termos Emitidos (2ª Via Sob Demanda)")
+        st.caption("Reconstrói o PDF oficial na hora (individual ou consolidado por lote/colaborador) sem ocupar espaço no banco.")
+        if not df_termos.empty:
+            df_t_reimp = df_termos.copy()
+            def _chave_reimp(row):
+                idt = str(row.get('id_termo', ''))
+                partes = idt.split('-')
+                prefixo = f"{partes[0]}-{partes[1]}" if len(partes) >= 2 else idt
+                return f"{prefixo} | {row.get('responsavel', '')} (Mat: {row.get('matricula', '')}) | Emissão: {row.get('data_emissao', '')} [{row.get('status_termo', '')}]"
+
+            df_t_reimp['grupo_reimp'] = df_t_reimp.apply(_chave_reimp, axis=1)
+            opcoes_2via = list(reversed(df_t_reimp['grupo_reimp'].unique().tolist()))
+            sel_2via = st.selectbox("Selecione o Termo / Lote para Reimpressão (2ª Via):", opcoes_2via)
+            df_itens_2via = df_t_reimp[df_t_reimp['grupo_reimp'] == sel_2via]
+            st.dataframe(df_itens_2via[['id_termo', 'patrimonio', 'responsavel', 'matricula', 'unidade', 'data_emissao', 'status_termo']], use_container_width=True, hide_index=True)
+
+            if st.button("🖨️ Reconstruir e Baixar 2ª Via em PDF", type="primary"):
+                t_info = df_itens_2via.iloc[0]
+                pats_2via = df_itens_2via['patrimonio'].astype(str).tolist()
+                mat = limpar_texto_matricula(t_info['matricula'])
+                
+                ativos_match = df_ativos[df_ativos['patrimonio'].isin(pats_2via)] if not df_ativos.empty else pd.DataFrame()
+                emp_match = df_empregados[df_empregados['matricula'].astype(str) == mat] if (not df_empregados.empty and mat) else pd.DataFrame()
+                
+                if not ativos_match.empty:
+                    emp = emp_match.iloc[0].fillna("").to_dict() if not emp_match.empty else {}
+                    df_pdf_2via = _montar_df_pdf_equipamentos(ativos_match, t_info['unidade'], str(t_info['id_termo']))
+                    caminho_pdf = gerar_termo_pdf(
+                        pats_2via[0], t_info['responsavel'], mat, 
+                        emp.get('cpf', ''), emp.get('rg', ''), 
+                        emp.get('projeto', ativos_match.iloc[0].get('projeto', '')), 
+                        t_info['unidade'], df_pdf_2via
+                    )
+                    with open(caminho_pdf, "rb") as pdf_file:
+                        PDFbyte = pdf_file.read()
+                    st.session_state.pdf_termo_pronto = {
+                        'bytes': PDFbyte,
+                        'nome_arquivo': f"2Via_Termo_PROCISA_{t_info['responsavel'].replace(' ', '_')}.pdf",
+                        'msg': f"✅ 2ª Via do Termo ({len(pats_2via)} equipamento(s)) gerada dinamicamente!"
+                    }
+                    st.rerun()
                 else:
-                    st.warning("⚠️ Matrícula não encontrada na base. Preencha os campos abaixo manualmente.")
-            
-            with st.form("form_termo_avulso"):
+                    st.error("Ativo(s) vinculado(s) não encontrado(s) na base mestra.")
+        else:
+            st.info("Nenhum termo registado no histórico.")
+
+    # --- SUB-ABA 2: EMISSÃO EXCEPCIONAL MULTI-ITENS E BAIXA DE TERMO ---
+    with aba_avulso:
+        acao_trm = st.radio("Selecione a Operação:", ["📤 Emitir Novo Termo Excepcional (Multi-Equipamentos)", "📥 Encerrar / Baixar Termo Ativo (Devolução)"], horizontal=True)
+        if acao_trm.startswith("📤"):
+            c_t1, c_t2 = st.columns(2)
+            with c_t1:
+                op_at_trm = df_ativos.apply(
+                    lambda r: f"Pat: {r['patrimonio']} | {r.get('equipamento','')} {r.get('marca','')} {r.get('modelo','')} [PAT: {r['patrimonio']}]",
+                    axis=1
+                ).tolist() if not df_ativos.empty else []
+                sel_ats_trm = st.multiselect("1️⃣ Selecione o(s) Equipamento(s) para o Termo:", op_at_trm)
+            with c_t2:
+                matricula_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
+                mat_limpa = limpar_texto_matricula(matricula_busca)
+                emp_dict = {'nome': '', 'cpf': '', 'rg': '', 'projeto': '', 'unidade': ''}
+                if mat_limpa and not df_empregados.empty:
+                    match_emp = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
+                    if not match_emp.empty:
+                        emp_dict = match_emp.iloc[0].fillna("").to_dict()
+                        st.success(f"👤 Colaborador: {emp_dict.get('nome', '')}")
+
+            with st.form("form_termo_avulso_multi"):
                 colA, colB = st.columns(2)
                 with colA:
-                    patrimonio_termo = st.text_input("Patrimônio ou Série do Equipamento:")
-                    responsavel_termo = st.text_input("Nome do Responsável:", value=emp_dict.get('nome', ''))
-                    cpf_termo = st.text_input("CPF:", value=emp_dict.get('cpf', ''))
-                    rg_termo = st.text_input("RG:", value=emp_dict.get('rg', ''))
+                    responsavel_termo = st.text_input("Nome do Responsável *", value=emp_dict.get('nome', ''))
+                    cpf_termo = st.text_input("CPF", value=emp_dict.get('cpf', ''))
+                    rg_termo = st.text_input("RG", value=emp_dict.get('rg', ''))
                 with colB:
-                    matricula_termo = st.text_input("Matrícula (Confirmação):", value=mat_limpa)
-                    unidade_termo = st.text_input("Unidade / Área / Coordenação:", value=emp_dict.get('unidade', ''))
-                    projeto_termo = st.text_input("Projeto:", value=emp_dict.get('projeto', ''))
-                submit_termo = st.form_submit_button("Gerar PDF do Termo", type="primary")
+                    matricula_termo = st.text_input("Matrícula", value=mat_limpa)
+                    unidade_termo = st.text_input("Unidade / Área / Coordenação", value=emp_dict.get('unidade', ''))
+                    projeto_termo = st.text_input("Projeto", value=emp_dict.get('projeto', ''))
+                submit_termo = st.form_submit_button("🖨️ Gerar PDF Único do Termo", type="primary")
                 
-            if submit_termo and patrimonio_termo.strip():
-                ativo_info_termo = buscar_ativo(patrimonio_termo, df_ativos)
+            if submit_termo and sel_ats_trm and responsavel_termo.strip():
+                pats_t = [s.split("[PAT: ")[1].replace("]", "") for s in sel_ats_trm]
+                ativos_info_t = df_ativos[df_ativos['patrimonio'].isin(pats_t)]
+                mat_salvar = limpar_texto_matricula(matricula_termo)
+                stamp_av = datetime.now().strftime('%Y%m%d%H%M%S')
+
+                df_pdf_av = _montar_df_pdf_equipamentos(ativos_info_t, unidade_termo.strip(), f"TRM-{stamp_av}")
+                caminho_pdf = gerar_termo_pdf(
+                    pats_t[0], responsavel_termo.strip(), mat_salvar, 
+                    cpf_termo.strip(), rg_termo.strip(), projeto_termo.strip(), unidade_termo.strip(), 
+                    df_pdf_av
+                )
+                with open(caminho_pdf, "rb") as pdf_file: 
+                    PDFbyte = pdf_file.read()
                 
-                if not ativo_info_termo.empty:
-                    pat_real = ativo_info_termo.iloc[0]['patrimonio']
-                    mat_salvar = limpar_texto_matricula(matricula_termo)
-                    caminho_pdf = gerar_termo_pdf(
-                        pat_real, responsavel_termo.strip(), mat_salvar, 
-                        cpf_termo.strip(), rg_termo.strip(), projeto_termo.strip(), unidade_termo.strip(), 
-                        ativo_info_termo
-                    )
-                    with open(caminho_pdf, "rb") as pdf_file: 
-                        PDFbyte = pdf_file.read()
-                    
-                    id_termo = f"TRM-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                    novo_termo = {
-                        'id_termo': id_termo, 
-                        'patrimonio': pat_real, 
+                novos_termos_av = []
+                for idx_a, p_a in enumerate(pats_t, start=1):
+                    novos_termos_av.append({
+                        'id_termo': f"TRM-{stamp_av}-{idx_a:02d}", 
+                        'patrimonio': p_a, 
                         'responsavel': responsavel_termo.strip(), 
                         'matricula': mat_salvar, 
                         'unidade': unidade_termo.strip(), 
                         'data_emissao': datetime.now().strftime('%Y-%m-%d'), 
                         'data_baixa': '', 
                         'status_termo': 'Ativo'
-                    }
-                    try:
-                        supabase.table('termos').insert(novo_termo).execute()
-                        st.cache_data.clear()
-                        registrar_log_auditoria("EMISSÃO DE TERMO (AVULSO)", pat_real, f"Termo {id_termo} emitido manualmente.")
-                        
-                        st.session_state.pdf_termo_pronto = {
-                            'bytes': PDFbyte,
-                            'nome_arquivo': f"Termo_PROCISA_{pat_real}.pdf",
-                            'msg': "✅ Termo registrado e ativado na nuvem!"
-                        }
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar termo: {e}")
-                else:
-                    st.error("Equipamento não localizado. Verifique o patrimônio/série.")
-                    
-        elif opcao_termo == "🔄 Emitir 2ª Via de Termo":
-            if not df_termos.empty:
-                opcoes_2via = df_termos.apply(lambda r: f"{r['id_termo']} | Pat: {r['patrimonio']} | {r['responsavel']} ({r['status_termo']})", axis=1).tolist()
-                sel_2via = st.selectbox("Selecione o Termo para Reimpressão (2ª Via):", opcoes_2via)
-                if st.button("🖨️ Gerar 2ª Via em PDF", type="primary"):
-                    id_2via = sel_2via.split(" | ")[0]
-                    t_info = df_termos[df_termos['id_termo'] == id_2via].iloc[0]
-                    pat_real = t_info['patrimonio']
-                    mat = limpar_texto_matricula(t_info['matricula'])
-                    
-                    ativo_match = buscar_ativo(pat_real, df_ativos)
-                    emp_match = df_empregados[df_empregados['matricula'].astype(str) == mat] if (not df_empregados.empty and mat) else pd.DataFrame()
-                    
-                    if not ativo_match.empty:
-                        emp = emp_match.iloc[0].fillna("").to_dict() if not emp_match.empty else {}
-                        caminho_pdf = gerar_termo_pdf(
-                            pat_real, t_info['responsavel'], mat, 
-                            emp.get('cpf', ''), emp.get('rg', ''), 
-                            emp.get('projeto', ativo_match.iloc[0].get('projeto', '')), 
-                            t_info['unidade'], ativo_match
-                        )
-                        with open(caminho_pdf, "rb") as pdf_file:
-                            PDFbyte = pdf_file.read()
-                        st.session_state.pdf_termo_pronto = {
-                            'bytes': PDFbyte,
-                            'nome_arquivo': f"2Via_Termo_PROCISA_{pat_real}.pdf",
-                            'msg': f"✅ 2ª Via do Termo {id_2via} gerada com sucesso!"
-                        }
-                        st.rerun()
-                    else:
-                        st.error("Ativo vinculado não foi encontrado na base mestra.")
-            else:
-                st.info("Nenhum termo registado no histórico.")
+                    })
+                supabase.table('termos').insert(novos_termos_av).execute()
+                st.cache_data.clear()
+                registrar_log_auditoria("EMISSÃO DE TERMO (AVULSO)", f"{len(pats_t)} ativos", f"Termo emitido para {responsavel_termo.strip()}.")
+                st.session_state.pdf_termo_pronto = {
+                    'bytes': PDFbyte,
+                    'nome_arquivo': f"Termo_PROCISA_{responsavel_termo.strip().replace(' ', '_')}.pdf",
+                    'msg': f"✅ Termo com {len(pats_t)} equipamento(s) registrado e ativado na nuvem!"
+                }
+                st.rerun()
         else:
             pat_baixa = st.text_input("Patrimônio ou Série devolvido:")
             if st.button("Baixar Termo Ativo", type="primary"):
                 ativo_info_baixa = buscar_ativo(pat_baixa, df_ativos)
-                
                 if not ativo_info_baixa.empty:
                     pat_real = ativo_info_baixa.iloc[0]['patrimonio']
                     termos_ativos = df_termos[(df_termos['patrimonio'].astype(str) == str(pat_real)) & (df_termos['status_termo'].isin(['Ativo', 'Pendente Impressão']))] if not df_termos.empty else pd.DataFrame()
-                    
                     if not termos_ativos.empty:
-                        id_trm = termos_ativos.iloc[0]['id_termo']
-                        dados_update_trm = {
-                            'data_baixa': datetime.now().strftime('%Y-%m-%d'),
-                            'status_termo': 'Encerrado'
-                        }
-                        try:
-                            supabase.table('termos').update(dados_update_trm).eq('id_termo', id_trm).execute()
-                            st.cache_data.clear()
-                            registrar_log_auditoria("BAIXA DE TERMO", pat_real, f"Termo {id_trm} encerrado por devolução.")
-                            st.success("✅ Termo encerrado com sucesso!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao encerrar termo: {e}")
+                        for _, t_r in termos_ativos.iterrows():
+                            supabase.table('termos').update({
+                                'data_baixa': datetime.now().strftime('%Y-%m-%d'),
+                                'status_termo': 'Encerrado'
+                            }).eq('id_termo', t_r['id_termo']).execute()
+                        st.cache_data.clear()
+                        registrar_log_auditoria("BAIXA DE TERMO", pat_real, "Termo encerrado por devolução.")
+                        st.success("✅ Termo encerrado com sucesso!")
+                        st.rerun()
                     else:
                         st.warning("Nenhum termo ativo encontrado para este equipamento.")
                 else:
                     st.error("Patrimônio ou série não localizado.")
 
+    # --- SUB-ABA 3: DIVERGÊNCIAS ---
     with aba_diverg:
         pendentes = df_diverg[df_diverg['status_resolucao'] != 'Resolvido'] if not df_diverg.empty else pd.DataFrame()
-        
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("###### Reportar Nova Divergência")
@@ -583,53 +653,43 @@ def render_modulo_termos_divergencias(df_ativos, df_termos, df_diverg, df_empreg
                         'analista_responsavel': st.session_state.nome_real, 
                         'observacoes': obs_abertura.strip() if obs_abertura.strip() else 'Ativo segregado manualmente.'
                     }
-                    try:
-                        supabase.table('divergencias').insert(nova_div).execute()
-                        st.cache_data.clear()
-                        registrar_log_auditoria("DIVERGÊNCIA ABERTA", pat_div.strip(), f"Abertura manual: {obs_abertura}")
-                        st.success("Alerta criado com sucesso!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erro: {e}")
+                    supabase.table('divergencias').insert(nova_div).execute()
+                    st.cache_data.clear()
+                    registrar_log_auditoria("DIVERGÊNCIA ABERTA", pat_div.strip(), f"Abertura manual: {obs_abertura}")
+                    st.success("Alerta criado com sucesso!")
+                    st.rerun()
                         
         with c2:
             st.markdown("###### Resolver Pendência")
             if not pendentes.empty:
-                st.dataframe(pendentes[['id_divergencia', 'patrimonio', 'observacoes']], use_container_width=True)
+                st.dataframe(pendentes[['id_divergencia', 'patrimonio', 'observacoes']], use_container_width=True, hide_index=True)
                 id_div_selecionada = st.selectbox("Selecione a Divergência:", pendentes['id_divergencia'].tolist())
                 obs = st.text_area("Justificativa / Ação Tomada:")
                 analista = st.text_input("Analista Responsável:", value=st.session_state.nome_real)
                 if st.button("Aplicar Resolução", type="primary"):
                     if obs.strip() and analista.strip():
-                        try:
-                            dados_update_div = {
-                                'status_resolucao': 'Resolvido',
-                                'observacoes': obs.strip(),
-                                'analista_responsavel': analista.strip()
-                            }
-                            supabase.table('divergencias').update(dados_update_div).eq('id_divergencia', id_div_selecionada).execute()
-                            st.cache_data.clear()
-                            
-                            div_pat = pendentes[pendentes['id_divergencia'] == id_div_selecionada].iloc[0]['patrimonio']
-                            registrar_log_auditoria(
-                                "RESOLUÇÃO DIVERGÊNCIA", 
-                                div_pat, 
-                                f"Divergência {id_div_selecionada} resolvida. Ação: {obs.strip()}"
-                            )
-                            st.success("✅ Divergência resolvida com sucesso!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao resolver: {e}")
+                        supabase.table('divergencias').update({
+                            'status_resolucao': 'Resolvido',
+                            'observacoes': obs.strip(),
+                            'analista_responsavel': analista.strip()
+                        }).eq('id_divergencia', id_div_selecionada).execute()
+                        st.cache_data.clear()
+                        div_pat = pendentes[pendentes['id_divergencia'] == id_div_selecionada].iloc[0]['patrimonio']
+                        registrar_log_auditoria("RESOLUÇÃO DIVERGÊNCIA", div_pat, f"Divergência {id_div_selecionada} resolvida. Ação: {obs.strip()}")
+                        st.success("✅ Divergência resolvida com sucesso!")
+                        st.rerun()
                     else:
                         st.error("Preencha a justificativa.")
             else:
                 st.success("Nenhuma divergência pendente!")
 
+    exibir_marca_desenvolvedor()
+
 # ==========================================
 # MÓDULO 5: DIAGNÓSTICO (LABORATÓRIO)
 # ==========================================
 def render_modulo_laboratorio(df_ativos):
-    st.header("🔬 Laboratório Técnico")
+    st.subheader("🔬 Laboratório Técnico")
     patrimonio_lab = st.text_input("Patrimônio ou Série em Análise:")
     
     if patrimonio_lab.strip():
@@ -649,7 +709,6 @@ def render_modulo_laboratorio(df_ativos):
         if not ativo_match.empty:
             pat_real = ativo_match.iloc[0]['patrimonio']
             cond_antiga = ativo_match.iloc[0].get('condicoes_para_uso', '')
-            
             novo_status = 'Baixado' if ("INSERVÍVEL" in resultado or "REPROVADO" in resultado) else 'Disponível'
             
             dados_update_lab = {
@@ -663,18 +722,15 @@ def render_modulo_laboratorio(df_ativos):
             try:
                 supabase.table('ativos_master').update(dados_update_lab).eq('patrimonio', pat_real).execute()
                 st.cache_data.clear()
-                
-                registrar_log_auditoria(
-                    "LAUDO LABORATÓRIO", 
-                    pat_real, 
-                    f"Parecer: '{cond_antiga}' -> '{resultado}'. Novo Status: '{novo_status}'."
-                )
+                registrar_log_auditoria("LAUDO LABORATÓRIO", pat_real, f"Parecer: '{cond_antiga}' -> '{resultado}'. Novo Status: '{novo_status}'.")
                 st.success(f"✅ Laudo registrado! Ativo atualizado para: {novo_status}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro ao salvar laudo: {e}")
         else:
             st.warning("⚠️ Patrimônio ou série não localizado.")
+
+    exibir_marca_desenvolvedor()
 
 # ==========================================
 # MÓDULO 8 (EQUIPAMENTOS): MODO OPERADOR QR CODE AUTOMÁTICO + FOLHA A4
@@ -774,3 +830,5 @@ def render_operador_qrcode_eqp(df_ativos, df_empregados):
                     st.rerun()
         else:
             st.info("Base de equipamentos vazia.")
+
+    exibir_marca_desenvolvedor()
