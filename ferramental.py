@@ -98,16 +98,23 @@ def formatar_badge_alerta(status_op, cond_fis, dias_ociosos=0):
     return f"⚪ {st_up}"
 
 def _parse_float(val):
-    if not val: return 0.0
+    if not val:
+        return 0.0
     txt = str(val).replace("R$", "").replace(" ", "").strip()
-    if "," in txt and "." in txt: txt = txt.replace(".", "").replace(",", ".")
-    elif "," in txt: txt = txt.replace(",", ".")
-    try: return float(txt)
-    except: return 0.0
+    if "," in txt and "." in txt:
+        txt = txt.replace(".", "").replace(",", ".")
+    elif "," in txt:
+        txt = txt.replace(",", ".")
+    try:
+        return float(txt)
+    except Exception:
+        return 0.0
 
 def _parse_int(val, default=1):
-    try: return int(float(str(val).strip()))
-    except: return default
+    try:
+        return int(float(str(val).strip()))
+    except Exception:
+        return default
 
 def update_cols_fer():
     st.session_state.saved_cols_fer = st.session_state.ms_fer_key
@@ -170,11 +177,16 @@ def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status,
             novo_reg['enderecamento_02'] = end2_final
             novo_reg['responsavel_atual'] = novo_resp
             novo_reg['matricula'] = novo_mat
-            if novo_proj: novo_reg['projeto'] = novo_proj
-            if novo_coord: novo_reg['coordenacao'] = novo_coord
-            if dt_entrega: novo_reg['data_entrega'] = dt_entrega
-            if dt_devolucao: novo_reg['data_devolucao'] = dt_devolucao
-            if obs_extra: novo_reg['observacoes'] = obs_extra
+            if novo_proj:
+                novo_reg['projeto'] = novo_proj
+            if novo_coord:
+                novo_reg['coordenacao'] = novo_coord
+            if dt_entrega:
+                novo_reg['data_entrega'] = dt_entrega
+            if dt_devolucao:
+                novo_reg['data_devolucao'] = dt_devolucao
+            if obs_extra:
+                novo_reg['observacoes'] = obs_extra
             novo_reg['ultima_movimentacao'] = hoje_s
             novo_reg['dias_sem_movimentacao'] = '0'
             supabase.table('ferramentas_usadas').insert([novo_reg]).execute()
@@ -202,11 +214,16 @@ def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status,
                 'ultima_movimentacao': hoje_s,
                 'dias_sem_movimentacao': '0'
             }
-            if novo_proj: upd['projeto'] = novo_proj
-            if novo_coord: upd['coordenacao'] = novo_coord
-            if dt_entrega: upd['data_entrega'] = dt_entrega
-            if dt_devolucao: upd['data_devolucao'] = dt_devolucao
-            if obs_extra: upd['observacoes'] = obs_extra
+            if novo_proj:
+                upd['projeto'] = novo_proj
+            if novo_coord:
+                upd['coordenacao'] = novo_coord
+            if dt_entrega:
+                upd['data_entrega'] = dt_entrega
+            if dt_devolucao:
+                upd['data_devolucao'] = dt_devolucao
+            if obs_extra:
+                upd['observacoes'] = obs_extra
             supabase.table('ferramentas_usadas').update(upd).eq('id_controle', id_origem).execute()
             return id_origem, num_seq
 
@@ -471,9 +488,12 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                     df_up_f['enderecamento_02'] = df_up_f['enderecamento_02'].fillna('').astype(str).str.strip()
 
                 df_up_f['condicao_fisica'] = df_up_f['condicao_fisica'].fillna('USADO - BOM').replace('', 'USADO - BOM') if 'condicao_fisica' in df_up_f.columns else 'USADO - BOM'
-                if 'status_operacional' not in df_up_f.columns: df_up_f['status_operacional'] = 'DISPONÍVEL'
-                if 'localizacao' not in df_up_f.columns: df_up_f['localizacao'] = 'USADO-DISP'
-                if 'quantidade' not in df_up_f.columns: df_up_f['quantidade'] = '1'
+                if 'status_operacional' not in df_up_f.columns:
+                    df_up_f['status_operacional'] = 'DISPONÍVEL'
+                if 'localizacao' not in df_up_f.columns:
+                    df_up_f['localizacao'] = 'USADO-DISP'
+                if 'quantidade' not in df_up_f.columns:
+                    df_up_f['quantidade'] = '1'
 
                 for c_limpar in ['marca', 'modelo', 'numero_serie', 'categoria', 'projeto', 'coordenacao']:
                     if c_limpar in df_up_f.columns:
@@ -545,11 +565,11 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# F6: MODO OPERADOR - LEITOR QR CODE + FOLHA DE ETIQUETAS EM LOTE
+# F6: MODO OPERADOR - LEITOR QR CODE AUTOMÁTICO + FOLHA DE ETIQUETAS EM LOTE
 # ==========================================
 def render_operador_qrcode_fer(df_fer, df_empregados):
-    st.subheader("📷 Modo Operador — Leitura de QR Code / Código de Barras (Ferramental)")
-    st.caption("Bipe o código de barras/QR Code da Prateleira (Endereçamento 01/02) ou da Ferramenta (ID FER / Cód D365) para localizar e movimentar instantaneamente.")
+    st.subheader("📷 Modo Operador — Leitura Automática de QR Code (Ferramental)")
+    st.caption("Ative o '📱 Scanner Ao Vivo (Auto)' no smartphone para leitura contínua automática ou utilize coletor óptico.")
 
     if st.session_state.get('pdf_etiquetas_fer_pronto'):
         st.success(st.session_state.pdf_etiquetas_fer_pronto['msg'])
@@ -566,27 +586,18 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
         st.divider()
 
     aba_bipar, aba_etiquetas = st.tabs([
-        "📡 Coletor / Scanner (Reconhecimento e Movimentação Rápida)",
+        "📡 Coletor / Scanner Automático (Reconhecimento e Movimentação)",
         "🏷️ Gerador de Folha de Etiquetas QR Code em Lote (PDF A4)"
     ])
 
     with aba_bipar:
-        col_sc1, col_sc2 = st.columns([3, 1])
-        with col_sc1:
-            codigo_lido = st.text_input(
-                "🔫 Bipe com o Leitor ou Digite o Código (Endereçamento 01, Endereçamento 02, ID FER ou Cód D365):",
-                placeholder="Ex: US-AC1N1P9CX1 ou FER-000001 ou 146...",
-                key="input_qr_fer"
-            )
-        with col_sc2:
-            usar_cam = st.toggle("📷 Usar Câmera do Celular/Tablet", value=False)
+        render_leitor_fn = getattr(nuvem, 'render_leitor_qrcode_mobile', None)
+        if render_leitor_fn:
+            termo_qr = render_leitor_fn("fer_qr", "Ex: US-AC1N1P9CX1 ou FER-000001 ou 146...")
+        else:
+            termo_qr = st.text_input("🔫 Bipe ou Digite o Código:", placeholder="Ex: US-AC1N1P9CX1 ou FER-000001...").strip().upper()
 
-        if usar_cam:
-            st.info("Aponte a câmera do dispositivo para o QR Code ou utilize o teclado com ícone de código de barras nativo do telemóvel no campo acima.")
-            st.camera_input("Leitura Óptica de Verificação", key="cam_qr_fer")
-
-        if codigo_lido.strip() and not df_fer.empty:
-            termo_qr = codigo_lido.strip().upper()
+        if termo_qr and not df_fer.empty:
             e1_s = df_fer['enderecamento_01'].fillna("").astype(str).str.strip().str.upper()
             e2_s = df_fer['enderecamento_02'].fillna("").astype(str).str.strip().str.upper()
             id_s = df_fer['id_controle'].fillna("").astype(str).str.strip().str.upper()
@@ -745,8 +756,6 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
 
     with aba_etiquetas:
         st.markdown("###### 🖨️ Impressão em Lote de Folha de Etiquetas QR Code (PDF A4 - 21 Etiquetas por Folha)")
-        st.caption("Extraia automaticamente da planilha importada todos os códigos de Endereçamento 01 (Prateleiras), Endereçamento 02 (Caixas/Gavetas) ou IDs de Ferramentas.")
-
         modo_lote_qr = st.radio(
             "Selecione o Tipo de Folha de Etiquetas:",
             [
@@ -774,7 +783,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
 
             lista_op_ends = sorted(list(ends_map.keys()))
             if not lista_op_ends:
-                st.warning("Nenhum Endereçamento 01 ou 02 preenchido na base ainda. Use a opção 3 abaixo para digitar códigos manualmente ou importe a planilha.")
+                st.warning("Nenhum Endereçamento 01 ou 02 preenchido na base ainda.")
             else:
                 filtro_tipo_end = st.radio("Filtrar nível de endereço:", ["Ambos (Endereçamento 01 + 02)", "Apenas Endereçamento 01 (Estantes/Prateleiras)", "Apenas Endereçamento 02 (Caixas/Gavetas)"], horizontal=True)
                 opcoes_filtradas = [
@@ -784,7 +793,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                     or (filtro_tipo_end.startswith("Apenas Endereçamento 02") and ends_map[k]['tipo'] == 'ENDEREÇAMENTO 02')
                 ]
                 selecionados_end = st.multiselect(
-                    f"Endereços selecionados para a folha ({len(opcoes_filtradas)} encontrados):",
+                    f"Endereços selecionados ({len(opcoes_filtradas)} encontrados):",
                     options=opcoes_filtradas,
                     default=opcoes_filtradas
                 )
@@ -797,15 +806,9 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                     })
 
         elif modo_lote_qr.startswith("🛠️"):
-            if df_fer.empty:
-                st.warning("Nenhuma ferramenta cadastrada.")
-            else:
+            if not df_fer.empty:
                 op_fer_lbl = df_fer.apply(lambda r: f"{r['id_controle']} | Cód {r['codigo_d365']} - {r['descricao_d365'] or r['descricao_ferramenta']} ({r['enderecamento_01']})", axis=1).tolist()
-                sel_fer_lbl = st.multiselect(
-                    "Selecione as Ferramentas para gerar etiquetas (Padrão: primeiros 21 itens = 1 folha A4):",
-                    options=op_fer_lbl,
-                    default=op_fer_lbl[:21]
-                )
+                sel_fer_lbl = st.multiselect("Selecione as Ferramentas (21 por folha A4):", options=op_fer_lbl, default=op_fer_lbl[:21])
                 for item_l in sel_fer_lbl:
                     id_f_l = item_l.split(" | ")[0]
                     r_f = df_fer[df_fer['id_controle'] == id_f_l].iloc[0]
@@ -816,30 +819,21 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                     })
 
         else:
-            txt_livre = st.text_area(
-                "Digite os códigos que deseja transformar em etiquetas QR Code (um por linha ou separados por vírgula):",
-                value="US-AC1N1P9\nUS-AC1N1P9CX1\nUS-AC1N1P9CX2"
-            )
-            sub_livre = st.text_input("Subtítulo padrão das etiquetas:", value="ALMOXARIFADO FERRAMENTAL")
+            txt_livre = st.text_area("Digite os códigos (um por linha):", value="US-AC1N1P9\nUS-AC1N1P9CX1")
+            sub_livre = st.text_input("Subtítulo padrão:", value="ALMOXARIFADO FERRAMENTAL")
             cods_livres = [c.strip().upper() for c in txt_livre.replace(",", "\n").split("\n") if c.strip()]
             for cl in cods_livres:
-                etiquetas_para_gerar.append({
-                    'codigo': cl,
-                    'tipo': 'ENDEREÇO / LOCAL',
-                    'subtitulo': sub_livre.strip()
-                })
+                etiquetas_para_gerar.append({'codigo': cl, 'tipo': 'ENDEREÇO / LOCAL', 'subtitulo': sub_livre.strip()})
 
         if etiquetas_para_gerar:
-            qtd_folhas = (len(etiquetas_para_gerar) + 20) // 21
-            st.info(f"📄 Pronto para gerar **{len(etiquetas_para_gerar)} etiqueta(s) QR Code** distribuídas em **{qtd_folhas} folha(s) A4**.")
             if st.button(f"🖨️ Gerar Folha de Etiquetas em PDF ({len(etiquetas_para_gerar)} etiquetas)", type="primary"):
-                with st.spinner("Montando grade de QR Codes em alta definição no PDF A4..."):
+                with st.spinner("Montando grade de QR Codes no PDF A4..."):
                     caminho_pdf_qr = gerar_etiquetas_qrcode_pdf(etiquetas_para_gerar)
                     with open(caminho_pdf_qr, "rb") as f_q:
                         st.session_state.pdf_etiquetas_fer_pronto = {
                             'bytes': f_q.read(),
                             'nome': f"Folha_Etiquetas_QR_Ferramental_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                            'msg': f"✅ Folha A4 com {len(etiquetas_para_gerar)} etiquetas QR Code gerada com sucesso!"
+                            'msg': f"✅ Folha A4 com {len(etiquetas_para_gerar)} etiquetas QR Code gerada!"
                         }
                     st.rerun()
 
@@ -1464,7 +1458,8 @@ def render_conciliacao_d365_fer(df_fer, df_conc_d365):
             if cod:
                 q = _parse_int(r.get('quantidade', '1'), 1)
                 saldos_op_map[cod] = saldos_op_map.get(cod, 0) + q
-                if cod not in desc_map: desc_map[cod] = r.get('descricao_d365') or r.get('descricao_ferramenta', '')
+                if cod not in desc_map:
+                    desc_map[cod] = r.get('descricao_d365') or r.get('descricao_ferramenta', '')
 
     with st.expander("➕ Informar / Atualizar Saldo Oficial do D365 para Comparação", expanded=False):
         with st.form("form_conc_d365"):
