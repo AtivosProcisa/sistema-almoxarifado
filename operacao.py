@@ -27,19 +27,16 @@ def localizar_colaborador(termo, df_empregados):
         return {}
 
     s_mat = df_empregados['matricula'].fillna("").apply(limpar_texto_matricula)
-    # 1. Igualdade direta
     m1 = df_empregados[s_mat == t_limpo]
     if not m1.empty:
         return m1.iloc[0].fillna("").to_dict()
 
-    # 2. Igualdade ignorando zeros à esquerda (Ex: '0150246' == '150246')
     t_sem_zero = t_limpo.lstrip("0")
     if t_sem_zero:
         m2 = df_empregados[s_mat.apply(lambda x: x.lstrip("0") == t_sem_zero)]
         if not m2.empty:
             return m2.iloc[0].fillna("").to_dict()
 
-    # 3. Busca pelo nome caso tenha digitado texto
     if 'nome' in df_empregados.columns:
         m3 = df_empregados[df_empregados['nome'].fillna("").astype(str).str.upper().str.contains(t_limpo.upper(), regex=False, na=False)]
         if not m3.empty:
@@ -50,13 +47,11 @@ def localizar_colaborador(termo, df_empregados):
 def _resolver_dados_termo_colaborador(resp_raw, mat_raw, unid_raw, proj_raw, df_empregados):
     """
     Garante que no PDF do Termo o campo 'Usuário' SEMPRE tenha o Nome Real
-    e o campo 'Matrícula' SEMPRE tenha o número da matrícula, mesmo que na movimentação
-    a matrícula tenha sido colocada no lugar do nome.
+    e o campo 'Matrícula' SEMPRE tenha o número da matrícula.
     """
     r_txt = str(resp_raw or "").strip()
     m_txt = limpar_texto_matricula(mat_raw)
 
-    # Se o que veio em 'responsavel' for um número (ex: '150246') e 'matricula' estiver vazia, corrige!
     if r_txt.isdigit() and not m_txt:
         m_txt = r_txt
 
@@ -68,7 +63,6 @@ def _resolver_dados_termo_colaborador(resp_raw, mat_raw, unid_raw, proj_raw, df_
     unid_final = emp.get('unidade', '').strip() or str(unid_raw or "").strip()
     proj_final = emp.get('projeto', '').strip() or str(proj_raw or "").strip()
 
-    # Caso ainda não tenha nome na tabela de empregados, exibe ao menos o identificador
     if not nome_final:
         nome_final = r_txt
 
@@ -333,7 +327,6 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             coord_auto = unidade_escolhida
             mat_auto = ""
 
-        # Chave dinâmica baseada na matrícula para forçar o Streamlit a atualizar os campos de Nome/Projeto assim que a matrícula mudar
         sufixo_key = f"{cod_tipo}_{mat_auto}_{unidade_escolhida}"
 
         with st.form("form_solicitacao_multipla"):
@@ -359,9 +352,8 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
                 mat_salvar = limpar_texto_matricula(matricula_col) or limpar_texto_matricula(matricula_busca)
                 dest_salvar = destino.strip()
 
-                # Se o usuário digitou a matrícula mas não deu Enter antes de clicar no botão do form, busca o nome agora!
                 if cod_tipo == "MOV-01" and (not dest_salvar or dest_salvar.isdigit()):
-                    emp_ tardio = localizar_colaborador(mat_salvar or dest_salvar, df_empregados)
+                    emp_tardio = localizar_colaborador(mat_salvar or dest_salvar, df_empregados)
                     if emp_tardio:
                         dest_salvar = emp_tardio.get('nome', dest_salvar)
                         mat_salvar = emp_tardio.get('matricula', mat_salvar)
@@ -488,7 +480,6 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
             tipo_m = str(mov_ref.get('tipo_mov', ''))
             pats_lote = df_lote_atual['patrimonio'].astype(str).tolist()
 
-            # Resolve o nome real do colaborador caso no destino estivesse apenas a matrícula
             nome_res, mat_res, _, _, proj_res, unid_res = _resolver_dados_termo_colaborador(
                 mov_ref.get('destino', ''), mov_ref.get('matricula_solicitante', ''),
                 mov_ref.get('coordenacao', ''), mov_ref.get('projeto', ''), df_empregados
