@@ -66,6 +66,32 @@ def _maior_num_id_fer(df_fer):
 def gerar_proximo_id_fer(df_fer):
     return f"FER-{_maior_num_id_fer(df_fer) + 1:06d}"
 
+def localizar_colaborador_fer(termo, df_empregados):
+    """Localiza colaborador por matrícula (ignorando zeros à esquerda) ou nome."""
+    if df_empregados is None or df_empregados.empty or not termo:
+        return {}
+    t_limpo = limpar_texto_matricula(termo)
+    if not t_limpo:
+        return {}
+
+    s_mat = df_empregados['matricula'].fillna("").apply(limpar_texto_matricula)
+    m1 = df_empregados[s_mat == t_limpo]
+    if not m1.empty:
+        return m1.iloc[0].fillna("").to_dict()
+
+    t_sem_zero = t_limpo.lstrip("0")
+    if t_sem_zero:
+        m2 = df_empregados[s_mat.apply(lambda x: x.lstrip("0") == t_sem_zero)]
+        if not m2.empty:
+            return m2.iloc[0].fillna("").to_dict()
+
+    if 'nome' in df_empregados.columns:
+        m3 = df_empregados[df_empregados['nome'].fillna("").astype(str).str.upper().str.contains(t_limpo.upper(), regex=False, na=False)]
+        if not m3.empty:
+            return m3.iloc[0].fillna("").to_dict()
+
+    return {}
+
 def _extrair_enderecos_linha(row):
     """Garante a leitura de enderecamento_01 e 02 mesmo se vierem da 1ª importação (salvos em observacoes)."""
     e1 = str(row.get('enderecamento_01', '')).strip()
@@ -77,14 +103,16 @@ def _extrair_enderecos_linha(row):
             e1 = partes[0].strip()
         if len(partes) >= 2:
             e2 = partes[1].strip()
-    if e1.lower() in {'none', 'nan'}: e1 = ""
-    if e2.lower() in {'none', 'nan'}: e2 = ""
+    if e1.lower() in {'none', 'nan'}:
+        e1 = ""
+    if e2.lower() in {'none', 'nan'}:
+        e2 = ""
     return e1, e2
 
 def _interpretar_payload_qrcode(texto_qr):
     """
-    Se o QR Code lido estiver no formato composto 'D365:146|FER:FER-000001|LOC:US-AC1N1P9/US-AC1N1P9CX1',
-    extrai os componentes para busca imediata da ferramenta e da localização.
+    Interpreta strings compostas do QR Code ('D365:146|FER:FER-000001|LOC:US-AC1N1P9/US-AC1N1P9CX1')
+    ou códigos simples para localizar a ferramenta e sua localização.
     """
     bruto = str(texto_qr).strip().upper()
     info = {'bruto': bruto, 'd365': '', 'fer': '', 'loc1': '', 'loc2': ''}
@@ -96,8 +124,10 @@ def _interpretar_payload_qrcode(texto_qr):
                 info['fer'] = parte.split(":", 1)[1].strip()
             elif parte.startswith("LOC:"):
                 locs = parte.replace("LOC:", "").strip().split("/")
-                if len(locs) >= 1: info['loc1'] = locs[0].strip()
-                if len(locs) >= 2: info['loc2'] = locs[1].strip()
+                if len(locs) >= 1:
+                    info['loc1'] = locs[0].strip()
+                if len(locs) >= 2:
+                    info['loc2'] = locs[1].strip()
     return info
 
 def buscar_ferramenta(termo_busca, df_fer):
@@ -110,8 +140,8 @@ def buscar_ferramenta(termo_busca, df_fer):
     c_d365 = df_fer['codigo_d365'].fillna("").astype(str).str.strip().str.upper()
     pat = df_fer['patrimonio'].fillna("").astype(str).str.strip().str.upper()
     ser = df_fer['numero_serie'].fillna("").astype(str).str.strip().str.upper()
-    e1 = df_fer['enderecamento_01'].fillna("").astype(str).str.strip().str.upper()
-    e2 = df_fer['enderecamento_02'].fillna("").astype(str).str.strip().str.upper()
+    e1 = df_fer.apply(lambda r: _extrair_enderecos_linha(r)[0].upper(), axis=1)
+    e2 = df_fer.apply(lambda r: _extrair_enderecos_linha(r)[1].upper(), axis=1)
     return df_fer[(id_c == t) | (c_d365 == t) | (pat == t) | (ser == t) | (e1 == t) | (e2 == t)]
 
 def formatar_badge_alerta(status_op, cond_fis, dias_ociosos=0):
@@ -235,8 +265,8 @@ def render_seletor_excel_ferramentas(df_fonte, chave_unica, multiplo=True, altur
         'Descrição D365': df_view['descricao_d365'].astype(str),
         'Nome / Pesquisa': df_view['descricao_ferramenta'].astype(str),
         'Saldo': df_view['quantidade'].astype(str),
-        'Endereço 01': df_view['enderecamento_01'].astype(str),
-        'Endereço 02': df_view['enderecamento_02'].astype(str),
+        'Endereço 01': df_view.apply(lambda r: _extrair_enderecos_linha(r)[0], axis=1),
+        'Endereço 02': df_view.apply(lambda r: _extrair_enderecos_linha(r)[1], axis=1),
         'Condição': df_view['condicao_fisica'].astype(str),
         'ID FER': df_view['id_controle'].astype(str)
     })
@@ -278,7 +308,7 @@ def render_seletor_excel_ferramentas(df_fonte, chave_unica, multiplo=True, altur
 # F0: DASHBOARD EXECUTIVO - VISÃO GERAL (7 PERGUNTAS DE GESTÃO)
 # ==========================================
 def render_dashboard_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer):
-    st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("📊 Dashboard Executivo — Visão Geral do Ferramental")
     st.caption("Respostas rápidas de diagnóstico gerencial sobre volume, disponibilidade, localização, composição, inoperância, integridade cadastral e ações imediatas.")
 
@@ -517,18 +547,19 @@ def _executar_movimentacao_quantidade(df_fer, id_origem, qtd_mover, novo_status,
             return id_origem, num_seq
 
 # ==========================================
-# F1: PAINEL OPERACIONAL DE FERRAMENTAS
+# F1: PAINEL OPERACIONAL DE FERRAMENTAS (COM EDIÇÃO AUDITADA)
 # ==========================================
 def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365):
     if 'saved_cols_fer' not in st.session_state:
         prefs = carregar_preferencias_colunas()
         st.session_state.saved_cols_fer = prefs.get('fer', list(COLUNAS_FERRAMENTAS))
 
-    st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("🛠️ Painel Operacional — Ferramentas Usadas / Reutilizáveis")
 
     abas_principais = [
         "📋 Estoque Segmentado por Status",
+        "✏️ Editar Ferramenta Carregada",
         "➕ Cadastrar / Receber Ferramenta",
         "📜 Histórico de Movimentos",
         "📥 Importar / Exportar & Backup"
@@ -634,13 +665,112 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                     if not df_item_g.empty:
                         df_show = df_item_g[cols_exibir].copy()
                         df_show.insert(0, "Alerta", df_item_g.apply(lambda r: formatar_badge_alerta(r.get('status_operacional',''), r.get('condicao_fisica',''), r.get('dias_sem_movimentacao', 0)), axis=1))
-                        st.dataframe(df_show, use_container_width=True, hide_index=True, height=440)
+                        st.dataframe(df_show, use_container_width=True, hide_index=True, height=430)
                     else:
                         st.info("Nenhuma ferramenta enquadrada nesta categoria no momento.")
         else:
             st.info("Nenhuma ferramenta cadastrada na base.")
 
+    # --- ABA 1: EDITAR FERRAMENTA CARREGADA (COM TRILHA DETALHADA NA AUDITORIA) ---
     with tabs[1]:
+        st.subheader("✏️ Editar Informações de Ferramenta Carregada")
+        st.caption("Busque e marque na tabela abaixo a ferramenta que deseja editar manualmente. Qualquer campo alterado é gravado na aba Auditoria Geral (Antes -> Depois).")
+
+        df_ed_fer_sel = render_seletor_excel_ferramentas(df_fer, "edit_manual_fer", multiplo=False, altura=190)
+
+        if not df_ed_fer_sel.empty:
+            reg_f_ant = df_ed_fer_sel.iloc[0].to_dict()
+            id_fer_alvo = str(reg_f_ant['id_controle']).strip()
+            e1_ant, e2_ant = _extrair_enderecos_linha(reg_f_ant)
+
+            st.info(f"🔧 **Editando ID FER:** `{id_fer_alvo}` | **Cód D365:** `{reg_f_ant.get('codigo_d365','')}` — {reg_f_ant.get('descricao_d365') or reg_f_ant.get('descricao_ferramenta')}")
+
+            with st.form(f"form_editar_fer_{id_fer_alvo}"):
+                f1, f2, f3, f4 = st.columns(4)
+                with f1:
+                    st.text_input("ID Controle (Chave Fixa)", value=id_fer_alvo, disabled=True)
+                    ed_f_d365 = st.text_input("Código D365", value=str(reg_f_ant.get('codigo_d365', '')))
+                    ed_f_dd365 = st.text_input("Descrição Oficial D365", value=str(reg_f_ant.get('descricao_d365', '')))
+                    ed_f_desc = st.text_input("Descrição / Pesquisar Nome", value=str(reg_f_ant.get('descricao_ferramenta', '')))
+                with f2:
+                    ed_f_cat = st.text_input("Categoria", value=str(reg_f_ant.get('categoria', '')))
+                    ed_f_marca = st.text_input("Marca", value=str(reg_f_ant.get('marca', '')))
+                    ed_f_mod = st.text_input("Modelo", value=str(reg_f_ant.get('modelo', '')))
+                    ed_f_ser = st.text_input("Número de Série", value=str(reg_f_ant.get('numero_serie', '')))
+                with f3:
+                    ed_f_pat = st.text_input("Patrimônio", value=str(reg_f_ant.get('patrimonio', '')))
+                    ed_f_qtd = st.number_input("Quantidade", min_value=0, value=_parse_int(reg_f_ant.get('quantidade', '1'), 1))
+                    cd_f_at = str(reg_f_ant.get('condicao_fisica', 'USADO - BOM'))
+                    ed_f_cond = st.selectbox("Condição Física", LISTA_CONDICAO_FISICA, index=LISTA_CONDICAO_FISICA.index(cd_f_at) if cd_f_at in LISTA_CONDICAO_FISICA else 1)
+                    st_f_at = str(reg_f_ant.get('status_operacional', 'DISPONÍVEL'))
+                    ed_f_stat = st.selectbox("Status Operacional", LISTA_STATUS_OPERACIONAL, index=LISTA_STATUS_OPERACIONAL.index(st_f_at) if st_f_at in LISTA_STATUS_OPERACIONAL else 0)
+                with f4:
+                    lc_f_at = str(reg_f_ant.get('localizacao', 'USADO-DISP'))
+                    ed_f_loc = st.selectbox("Localização", LISTA_LOCALIZACOES_FER, index=LISTA_LOCALIZACOES_FER.index(lc_f_at) if lc_f_at in LISTA_LOCALIZACOES_FER else 0)
+                    ed_f_e1 = st.text_input("Endereçamento 01 (LOCAL)", value=e1_ant)
+                    ed_f_e2 = st.text_input("Endereçamento 02 (Descri. Local)", value=e2_ant)
+                    ed_f_resp = st.text_input("Responsável Atual", value=str(reg_f_ant.get('responsavel_atual', '')))
+
+                fe1, fe2, fe3, fe4 = st.columns(4)
+                with fe1:
+                    ed_f_proj = st.text_input("Projeto", value=str(reg_f_ant.get('projeto', '')))
+                with fe2:
+                    ed_f_coord = st.text_input("Coordenação", value=str(reg_f_ant.get('coordenacao', '')))
+                with fe3:
+                    ed_f_val = st.text_input("Valor de Referência (R$)", value=str(reg_f_ant.get('valor_referencia', '0,00')))
+                with fe4:
+                    ed_f_obs = st.text_input("Observações", value=str(reg_f_ant.get('observacoes', '')))
+
+                motivo_ed_f = st.text_input("Motivo da Alteração Manual (Para registro na Auditoria):")
+
+                if st.form_submit_button("💾 Salvar Alterações na Ferramenta e Auditar", type="primary"):
+                    novos_f = {
+                        'codigo_d365': ed_f_d365.strip(),
+                        'descricao_d365': ed_f_dd365.strip(),
+                        'descricao_ferramenta': ed_f_desc.strip(),
+                        'categoria': ed_f_cat.strip(),
+                        'marca': ed_f_marca.strip(),
+                        'modelo': ed_f_mod.strip(),
+                        'numero_serie': ed_f_ser.strip(),
+                        'patrimonio': ed_f_pat.strip(),
+                        'quantidade': str(ed_f_qtd),
+                        'condicao_fisica': ed_f_cond,
+                        'status_operacional': ed_f_stat,
+                        'localizacao': ed_f_loc,
+                        'enderecamento_01': ed_f_e1.strip().upper(),
+                        'enderecamento_02': ed_f_e2.strip().upper(),
+                        'responsavel_atual': ed_f_resp.strip(),
+                        'projeto': ed_f_proj.strip(),
+                        'coordenacao': ed_f_coord.strip(),
+                        'valor_referencia': ed_f_val.strip(),
+                        'observacoes': ed_f_obs.strip(),
+                        'ultima_movimentacao': datetime.now().strftime('%Y-%m-%d')
+                    }
+
+                    mudancas_f = []
+                    for kf, vf_novo in novos_f.items():
+                        if kf == 'ultima_movimentacao':
+                            continue
+                        vf_ant = str(reg_f_ant.get(kf, '')).strip()
+                        if vf_ant != str(vf_novo).strip():
+                            mudancas_f.append(f"{kf}: '{vf_ant}' -> '{vf_novo}'")
+
+                    if not mudancas_f:
+                        st.warning("Nenhum campo foi modificado.")
+                    else:
+                        try:
+                            supabase.table('ferramentas_usadas').update(novos_f).eq('id_controle', id_fer_alvo).execute()
+                            det_aud = " | ".join(mudancas_f)
+                            if motivo_ed_f.strip():
+                                det_aud = f"[Motivo: {motivo_ed_f.strip()}] " + det_aud
+                            registrar_log_auditoria("EDIÇÃO MANUAL (FERRAMENTA)", id_fer_alvo, det_aud)
+                            st.cache_data.clear()
+                            st.success(f"✅ Ferramenta `{id_fer_alvo}` atualizada e auditada com sucesso ({len(mudancas_f)} alteração(ões))!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Erro ao salvar edição: {e}")
+
+    with tabs[2]:
         st.subheader("➕ Recebimento / Cadastro de Ferramenta Usada")
         prox_id = gerar_proximo_id_fer(df_fer)
         st.info(f"💡 Próximo código físico sequencial: **`{prox_id}`**.")
@@ -750,10 +880,10 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 else:
                     st.error("Preencha a 'Descrição Operacional da Ferramenta'.")
 
-    with tabs[2]:
+    with tabs[3]:
         st.dataframe(df_mov_fer, use_container_width=True, hide_index=True, height=450)
 
-    with tabs[3]:
+    with tabs[4]:
         stamp = datetime.now().strftime('%Y%m%d_%H%M')
         ce1, ce2, ce3 = st.columns(3)
         with ce1:
@@ -849,7 +979,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
                 st.error(f"Erro ao processar planilha: {e}")
 
     if st.session_state.perfil == 'Master':
-        with tabs[4]:
+        with tabs[5]:
             if not df_fer.empty:
                 df_del_f = df_fer[['id_controle', 'codigo_d365', 'descricao_ferramenta', 'quantidade', 'enderecamento_01', 'enderecamento_02', 'status_operacional']].copy()
                 df_del_f.insert(0, "Excluir", False)
@@ -876,6 +1006,7 @@ def render_painel_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_
 # F6: MODO OPERADOR - LEITOR QR CODE AUTOMÁTICO + FOLHA DE ETIQUETAS PADRÃO PROCISA
 # ==========================================
 def render_operador_qrcode_fer(df_fer, df_empregados):
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("📷 Modo Operador — Leitura Automática de QR Code (Ferramental)")
     st.caption("Ative o '📱 Scanner Ao Vivo (Auto)' no smartphone para leitura contínua automática ou utilize coletor óptico.")
 
@@ -994,22 +1125,19 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                                 st.rerun()
                     else:
                         mat_op = st.text_input("Bipe o Crachá ou Digite a Matrícula do Colaborador:")
-                        mat_op_limpa = limpar_texto_matricula(mat_op)
-                        emp_qr = {}
-                        if mat_op_limpa and not df_empregados.empty:
-                            m_eq = df_empregados[df_empregados['matricula'].astype(str) == mat_op_limpa]
-                            if not m_eq.empty:
-                                emp_qr = m_eq.iloc[0].fillna("").to_dict()
-                                st.info(f"👤 Colaborador: **{emp_qr.get('nome')}** | Projeto: {emp_qr.get('projeto')}")
+                        emp_qr = localizar_colaborador_fer(mat_op, df_empregados)
+                        if mat_op.strip() and emp_qr:
+                            st.info(f"👤 Colaborador: **{emp_qr.get('nome')}** | Matrícula: {emp_qr.get('matricula')} | Projeto: {emp_qr.get('projeto')}")
 
+                        suf_q = emp_qr.get('matricula', limpar_texto_matricula(mat_op))
                         with st.form("form_qr_lib_cautela"):
                             cl1, cl2, cl3 = st.columns(3)
                             with cl1:
                                 qtd_lib_qr = st.number_input(f"Qtd a Liberar (Máx: {max_q_qr})", min_value=1, max_value=max_q_qr, value=1)
                             with cl2:
-                                nome_col_qr = st.text_input("Nome do Colaborador *", value=emp_qr.get('nome', ''))
+                                nome_col_qr = st.text_input("Nome do Colaborador *", value=emp_qr.get('nome', ''), key=f"q_nom_{suf_q}")
                             with cl3:
-                                proj_col_qr = st.text_input("Projeto *", value=emp_qr.get('projeto', ''))
+                                proj_col_qr = st.text_input("Projeto *", value=emp_qr.get('projeto', ''), key=f"q_prj_{suf_q}")
 
                             if st.form_submit_button("🚀 Liberar Ferramenta para o Colaborador", type="primary"):
                                 if nome_col_qr.strip():
@@ -1019,7 +1147,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                                     id_ent_qr, _ = _executar_movimentacao_quantidade(
                                         df_fer, id_sel_qr, qtd_lib_qr, "EM CAUTELA",
                                         reg_qr.get('condicao_fisica', 'USADO - BOM'), "CAMPO / COLABORADOR",
-                                        nome_col_qr.strip(), novo_mat=mat_op_limpa, novo_proj=proj_col_qr.strip(),
+                                        nome_col_qr.strip(), novo_mat=suf_q, novo_proj=proj_col_qr.strip(),
                                         novo_coord=emp_qr.get('unidade', ''), dt_entrega=hoje_s
                                     )
                                     supabase.table('cautelas_ferramentas').insert({
@@ -1027,7 +1155,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
                                         'id_fer': id_ent_qr,
                                         'codigo_d365': reg_qr.get('codigo_d365', ''),
                                         'colaborador': nome_col_qr.strip(),
-                                        'matricula': mat_op_limpa,
+                                        'matricula': suf_q,
                                         'projeto': proj_col_qr.strip(),
                                         'coordenacao': emp_qr.get('unidade', ''),
                                         'data_entrega': hoje_s,
@@ -1187,6 +1315,7 @@ def render_operador_qrcode_fer(df_fer, df_empregados):
 # F2: FLUXO DE INSPEÇÃO E MOVIMENTAÇÃO (COM BUSCA ESTILO EXCEL)
 # ==========================================
 def render_inspecao_movimentacao_fer(df_fer):
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("🔍 Fluxo de Inspeção, Classificação e Movimentação por Quantidade")
 
     aba_triagem, aba_mov_geral = st.tabs([
@@ -1338,6 +1467,7 @@ def render_inspecao_movimentacao_fer(df_fer):
 # F3: CONTROLE DE CAUTELA MÚLTIPLA (COM SELETOR ESTILO EXCEL) E REIMPRESSÃO
 # ==========================================
 def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("👷 Controle de Cautela (Seleção Estilo Excel, Devolução por Quantidade e Reimpressão)")
 
     if st.session_state.get('pdf_cautela_fer'):
@@ -1374,16 +1504,13 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
             st.markdown("###### 1️⃣ Busque (Estilo Filtro Excel) e marque na tabela as ferramentas a entregar:")
             df_itens_selecionados = render_seletor_excel_ferramentas(fer_disponiveis, "cautela_entrega_excel", multiplo=True, altura=220)
 
-            mat_busca = st.text_input("2️⃣ Digite a Matrícula do Colaborador e pressione Enter:")
-            mat_limpa = limpar_texto_matricula(mat_busca)
-            emp_info = {}
-            if mat_limpa and not df_empregados.empty:
-                m_e = df_empregados[df_empregados['matricula'].astype(str) == mat_limpa]
-                if not m_e.empty:
-                    emp_info = m_e.iloc[0].fillna("").to_dict()
-                    st.success(f"👤 Colaborador: **{emp_info.get('nome')}** | Projeto: {emp_info.get('projeto')} | Unidade: {emp_info.get('unidade')}")
+            mat_busca = st.text_input("2️⃣ Digite a Matrícula (ou Nome) do Colaborador e pressione Enter:")
+            emp_info = localizar_colaborador_fer(mat_busca, df_empregados)
+            if mat_busca.strip():
+                if emp_info:
+                    st.success(f"👤 Colaborador Localizado: **{emp_info.get('nome')}** | Matrícula: {emp_info.get('matricula')} | Projeto: {emp_info.get('projeto')} | Unidade: {emp_info.get('unidade')}")
                 else:
-                    st.warning("⚠️ Matrícula não localizada na base.")
+                    st.warning("⚠️ Matrícula não localizada na base. Preencha o nome manualmente abaixo.")
 
             qtds_entregar = {}
             if not df_itens_selecionados.empty:
@@ -1399,14 +1526,16 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                             min_value=1, max_value=saldo_val, value=1, key=f"qtd_caut_{id_fer}"
                         )
 
+            suf_caut = emp_info.get('matricula', limpar_texto_matricula(mat_busca))
+
             with st.form("form_nova_cautela_fer"):
                 cc1, cc2, cc3 = st.columns(3)
                 with cc1:
-                    col_nome = st.text_input("Colaborador *", value=emp_info.get('nome', ''))
-                    col_mat = st.text_input("Matrícula *", value=mat_limpa)
+                    col_nome = st.text_input("Colaborador *", value=emp_info.get('nome', ''), key=f"c_nom_{suf_caut}")
+                    col_mat = st.text_input("Matrícula *", value=suf_caut, key=f"c_mat_{suf_caut}")
                 with cc2:
-                    col_proj = st.text_input("Projeto *", value=emp_info.get('projeto', ''))
-                    col_coord = st.text_input("Coordenação / Unidade *", value=emp_info.get('unidade', ''))
+                    col_proj = st.text_input("Projeto *", value=emp_info.get('projeto', ''), key=f"c_prj_{suf_caut}")
+                    col_coord = st.text_input("Coordenação / Unidade *", value=emp_info.get('unidade', ''), key=f"c_crd_{suf_caut}")
                 with cc3:
                     dt_ent = st.date_input("Data da Entrega", datetime.today())
                     dt_prev = st.date_input("Data Prevista de Devolução", datetime.today() + timedelta(days=30))
@@ -1415,7 +1544,21 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                 gerar_pdf_chk = st.checkbox("Gerar Termo de Responsabilidade Único em PDF (Inclui todas as ferramentas marcadas)", value=True)
 
                 if st.form_submit_button("🚀 Confirmar Cautela Múltipla e Debitar Quantidades", type="primary"):
-                    if col_nome.strip() and not df_itens_selecionados.empty:
+                    nome_final_c = col_nome.strip()
+                    mat_final_c = limpar_texto_matricula(col_mat) or limpar_texto_matricula(mat_busca)
+                    proj_final_c = col_proj.strip()
+                    coord_final_c = col_coord.strip()
+                    emp_tardio_c = localizar_colaborador_fer(mat_final_c or nome_final_c, df_empregados)
+                    if emp_tardio_c:
+                        if not nome_final_c or nome_final_c.isdigit():
+                            nome_final_c = emp_tardio_c.get('nome', nome_final_c)
+                        mat_final_c = emp_tardio_c.get('matricula', mat_final_c)
+                        if not proj_final_c:
+                            proj_final_c = emp_tardio_c.get('projeto', '')
+                        if not coord_final_c:
+                            coord_final_c = emp_tardio_c.get('unidade', '')
+
+                    if nome_final_c and not df_itens_selecionados.empty:
                         try:
                             hoje_s = dt_ent.strftime('%Y-%m-%d')
                             agora_full = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1451,10 +1594,10 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                     novo_reg['quantidade'] = str(qtd_entregar)
                                     novo_reg['status_operacional'] = 'EM CAUTELA'
                                     novo_reg['localizacao'] = 'CAMPO / COLABORADOR'
-                                    novo_reg['responsavel_atual'] = col_nome.strip()
-                                    novo_reg['matricula'] = col_mat.strip()
-                                    novo_reg['projeto'] = col_proj.strip()
-                                    novo_reg['coordenacao'] = col_coord.strip()
+                                    novo_reg['responsavel_atual'] = nome_final_c
+                                    novo_reg['matricula'] = mat_final_c
+                                    novo_reg['projeto'] = proj_final_c
+                                    novo_reg['coordenacao'] = coord_final_c
                                     novo_reg['data_entrega'] = hoje_s
                                     novo_reg['ultima_movimentacao'] = hoje_s
                                     novo_reg['dias_sem_movimentacao'] = '0'
@@ -1465,10 +1608,10 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                     updates_existentes.append((id_fer_sel, {
                                         'status_operacional': 'EM CAUTELA',
                                         'localizacao': 'CAMPO / COLABORADOR',
-                                        'responsavel_atual': col_nome.strip(),
-                                        'matricula': col_mat.strip(),
-                                        'projeto': col_proj.strip(),
-                                        'coordenacao': col_coord.strip(),
+                                        'responsavel_atual': nome_final_c,
+                                        'matricula': mat_final_c,
+                                        'projeto': proj_final_c,
+                                        'coordenacao': coord_final_c,
                                         'data_entrega': hoje_s,
                                         'ultima_movimentacao': hoje_s,
                                         'dias_sem_movimentacao': '0',
@@ -1480,10 +1623,10 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                     'id_cautela': id_caut_unico,
                                     'id_fer': id_entregue,
                                     'codigo_d365': str(reg_f.get('codigo_d365', '')),
-                                    'colaborador': col_nome.strip(),
-                                    'matricula': col_mat.strip(),
-                                    'projeto': col_proj.strip(),
-                                    'coordenacao': col_coord.strip(),
+                                    'colaborador': nome_final_c,
+                                    'matricula': mat_final_c,
+                                    'projeto': proj_final_c,
+                                    'coordenacao': coord_final_c,
                                     'data_entrega': hoje_s,
                                     'condicao_entrega': str(reg_f.get('condicao_fisica', 'USADO - BOM')),
                                     'data_prevista_devolucao': dt_prev.strftime('%Y-%m-%d'),
@@ -1502,12 +1645,12 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                     'localizacao_origem': str(reg_f.get('localizacao', 'USADO-DISP')),
                                     'localizacao_destino': 'CAMPO / COLABORADOR',
                                     'responsavel_origem': 'ALMOXARIFADO',
-                                    'responsavel_destino': col_nome.strip(),
-                                    'projeto': col_proj.strip(),
+                                    'responsavel_destino': nome_final_c,
+                                    'projeto': proj_final_c,
                                     'quantidade': str(qtd_entregar),
                                     'documento': termo_lote_id,
                                     'usuario_registro': st.session_state.get('nome_real', 'Sistema'),
-                                    'observacao': f"Entrega em cautela ({qtd_entregar} un) para {col_nome.strip()}"
+                                    'observacao': f"Entrega em cautela ({qtd_entregar} un) para {nome_final_c}"
                                 })
 
                                 lista_fakes_pdf.append({
@@ -1519,7 +1662,7 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                                     'acessorios': obs_caut.strip(),
                                     'codigo_d365': reg_f.get('codigo_d365', ''),
                                     'descricao_d365': reg_f.get('descricao_d365') or reg_f.get('descricao_ferramenta', ''),
-                                    'coordenacao': col_coord.strip(),
+                                    'coordenacao': coord_final_c,
                                     'nf_procisa': termo_lote_id
                                 })
 
@@ -1534,20 +1677,22 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
 
                             if gerar_pdf_chk and lista_fakes_pdf:
                                 df_fake_ativo = pd.DataFrame(lista_fakes_pdf)
+                                cpf_pdf = (emp_tardio_c or emp_info).get('cpf', '')
+                                rg_pdf = (emp_tardio_c or emp_info).get('rg', '')
                                 caminho = gerar_termo_pdf(
-                                    termo_lote_id, col_nome.strip(), col_mat.strip(),
-                                    emp_info.get('cpf', ''), emp_info.get('rg', ''),
-                                    col_proj.strip(), col_coord.strip(), df_fake_ativo
+                                    termo_lote_id, nome_final_c, mat_final_c,
+                                    cpf_pdf, rg_pdf,
+                                    proj_final_c, coord_final_c, df_fake_ativo
                                 )
                                 with open(caminho, "rb") as f_pdf:
                                     st.session_state.pdf_cautela_fer = {
                                         'bytes': f_pdf.read(),
-                                        'nome': f"Termo_{termo_lote_id}_{col_nome.strip().replace(' ', '_')}.pdf",
-                                        'msg': f"✅ {len(lista_fakes_pdf)} ferramenta(s) entregue(s) sob o Termo {termo_lote_id}! Clique abaixo para baixar."
+                                        'nome': f"Termo_{termo_lote_id}_{nome_final_c.replace(' ', '_')}.pdf",
+                                        'msg': f"✅ {len(lista_fakes_pdf)} ferramenta(s) entregue(s) para **{nome_final_c}** sob o Termo {termo_lote_id}! Clique abaixo para baixar."
                                     }
 
                             st.session_state["sel_excel_ids_cautela_entrega_excel"] = set()
-                            registrar_log_auditoria("CAUTELA MÚLTIPLA", termo_lote_id, f"{len(lista_fakes_pdf)} itens entregues para {col_nome.strip()}.")
+                            registrar_log_auditoria("CAUTELA MÚLTIPLA", termo_lote_id, f"{len(lista_fakes_pdf)} itens entregues para {nome_final_c}.")
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as e:
@@ -1666,11 +1811,9 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
             if st.button("🖨️ Reconstruir e Baixar 2ª Via do Termo em PDF", type="primary"):
                 r_base = df_itens_termo.iloc[0].to_dict()
                 mat_r = limpar_texto_matricula(r_base.get('matricula', ''))
-                emp_r = {}
-                if mat_r and not df_empregados.empty:
-                    m_er = df_empregados[df_empregados['matricula'].astype(str) == mat_r]
-                    if not m_er.empty:
-                        emp_r = m_er.iloc[0].fillna("").to_dict()
+                emp_r = localizar_colaborador_fer(mat_r or r_base.get('colaborador', ''), df_empregados)
+                nome_r = emp_r.get('nome', '') or r_base.get('colaborador', '')
+                mat_final_r = emp_r.get('matricula', '') or mat_r
 
                 lista_pdf_reimp = []
                 for _, row_c in df_itens_termo.iterrows():
@@ -1697,18 +1840,18 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
                 df_fake_reimp = pd.DataFrame(lista_pdf_reimp)
                 caminho_2via = gerar_termo_pdf(
                     r_base.get('id_cautela', ''),
-                    r_base.get('colaborador', ''),
-                    mat_r,
+                    nome_r,
+                    mat_final_r,
                     emp_r.get('cpf', ''),
                     emp_r.get('rg', ''),
-                    r_base.get('projeto', ''),
-                    r_base.get('coordenacao', ''),
+                    r_base.get('projeto', '') or emp_r.get('projeto', ''),
+                    r_base.get('coordenacao', '') or emp_r.get('unidade', ''),
                     df_fake_reimp
                 )
                 with open(caminho_2via, "rb") as f_pdf:
                     st.session_state.pdf_cautela_fer = {
                         'bytes': f_pdf.read(),
-                        'nome': f"2Via_Termo_{r_base.get('colaborador', 'Colaborador').replace(' ', '_')}.pdf",
+                        'nome': f"2Via_Termo_{nome_r.replace(' ', '_')}.pdf",
                         'msg': "✅ 2ª Via do Termo gerada dinamicamente! Clique abaixo para fazer o download."
                     }
                 st.rerun()
@@ -1722,6 +1865,7 @@ def render_cautela_ferramentas(df_fer, df_caut_fer, df_empregados):
 # F4: MANUTENÇÃO, OBSOLESCÊNCIA E DESCARTE
 # ==========================================
 def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("🔧 Oficina / Manutenção & Controle de Obsolescência e Descarte")
 
     aba_manut, aba_baixa = st.tabs([
@@ -1788,6 +1932,7 @@ def render_manutencao_baixa_fer(df_fer, df_manut_fer, df_baixa_fer):
 # F5: DIVERGÊNCIA D365 X CONTROLE OPERACIONAL
 # ==========================================
 def render_conciliacao_d365_fer(df_fer, df_conc_d365):
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("⚖️ Divergência: Saldo D365 x Saldo Operacional de Usados")
     saldos_op_map, desc_map = {}, {}
     if not df_fer.empty:
