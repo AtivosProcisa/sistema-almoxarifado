@@ -5,6 +5,9 @@ import importlib
 
 st.set_page_config(page_title="Gestão de Ativos e Ferramental - PROCISA", layout="wide")
 
+# Ajusta o espaçamento superior global para evitar que títulos fiquem cortados pela barra fixa do Streamlit
+st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+
 import nuvem
 import pdf_termo
 import operacao
@@ -32,10 +35,10 @@ df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs, df_empregados = c
 df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365 = carregar_dados_ferramental()
 
 # ==========================================
-# VISÃO GERAL EXECUTIVA DE EQUIPAMENTOS (CASO GESTOR.PY NÃO TENHA FUNÇÃO SEPARADA)
+# VISÃO GERAL EXECUTIVA DE EQUIPAMENTOS (7 PERGUNTAS DE GESTÃO)
 # ==========================================
 def render_dashboard_executivo_eqp_fallback(df_ativos, df_mov, df_termos, df_diverg):
-    st.markdown("<style>div.block-container{padding-top: 1.2rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
+    st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("📊 Dashboard Executivo — Visão Geral de Equipamentos")
     st.caption("Respostas rápidas sobre o parque de equipamentos, disponibilidade, localização, tipos predominantes, inoperância, integridade cadastral e ações imediatas.")
 
