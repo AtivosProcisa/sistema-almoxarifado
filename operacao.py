@@ -16,10 +16,6 @@ gerar_termo_pdf = pdf_termo.gerar_termo_pdf
 # BUSCA INTELIGENTE DE COLABORADOR (POR MATRÍCULA OU NOME)
 # ==========================================
 def localizar_colaborador(termo, df_empregados):
-    """
-    Localiza colaborador na base 'empregados' mesmo se a matrícula tiver zeros à esquerda,
-    espaços, '.0' ou se o usuário digitar parte do nome.
-    """
     if df_empregados is None or df_empregados.empty or not termo:
         return {}
     t_limpo = limpar_texto_matricula(termo)
@@ -45,10 +41,6 @@ def localizar_colaborador(termo, df_empregados):
     return {}
 
 def _resolver_dados_termo_colaborador(resp_raw, mat_raw, unid_raw, proj_raw, df_empregados):
-    """
-    Garante que no PDF do Termo o campo 'Usuário' SEMPRE tenha o Nome Real
-    e o campo 'Matrícula' SEMPRE tenha o número da matrícula.
-    """
     r_txt = str(resp_raw or "").strip()
     m_txt = limpar_texto_matricula(mat_raw)
 
@@ -242,7 +234,7 @@ def _montar_df_pdf_equipamentos(df_ativos_selecionados, coord_padrao="", nf_padr
     return pd.DataFrame(linhas_pdf)
 
 # ==========================================
-# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (COM AUTO-PREENCHIMENTO FIEL PELA MATRÍCULA)
+# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (COM BLOQUEIO DE SEGREGADOS/ROUBADOS)
 # ==========================================
 def render_modulo_solicitacao(df_ativos, df_empregados):
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
@@ -291,7 +283,11 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             st.info(f"⚡ **Auto-Preenchimento Ativo:** Destino configurado automaticamente para **{tipo_mov.split('->')[1].strip()}**.")
 
     st.markdown("###### 3️⃣ Busque (Estilo Filtro Excel) e marque na tabela o(s) Equipamento(s) para movimentar:")
-    df_sel_ativos = render_seletor_excel_equipamentos(df_ativos, "solic_mov_eqp", multiplo=True, altura=230)
+    # Bloqueio de Movimentação: impede empréstimo/transferência de itens Segregados para Descarte, Roubados/Furtados ou Baixados
+    df_ativos_mov = df_ativos[
+        ~df_ativos['status_sistema'].astype(str).str.upper().str.strip().isin(['SEGREGADO PARA DESCARTE', 'ROUBADO/FURTADO', 'BAIXADO'])
+    ].copy() if not df_ativos.empty else pd.DataFrame()
+    df_sel_ativos = render_seletor_excel_equipamentos(df_ativos_mov, "solic_mov_eqp", multiplo=True, altura=230)
 
     if not df_sel_ativos.empty:
         primeiro_reg = df_sel_ativos.iloc[0].to_dict()
