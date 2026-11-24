@@ -96,6 +96,16 @@ def _extrair_anexo_download(val):
                 return None, None, None
     return None, None, None
 
+def _extrair_link_externo(val):
+    txt = str(val or "").strip()
+    if not txt or txt.startswith("B64|"):
+        return None
+    if txt.lower().startswith(("http://", "https://")):
+        return txt
+    if "." in txt and " " not in txt:
+        return f"https://{txt}"
+    return None
+
 def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("🚨 Governança de Ativos — Roubo/Furto, Sem Giro (Aging) e Descarte")
@@ -124,27 +134,49 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
             if not df_roubo.empty:
                 df_roubo_view = df_roubo.copy()
                 if 'anexo_bo' in df_roubo_view.columns:
-                    df_roubo_view['anexo_bo'] = df_roubo_view['anexo_bo'].apply(_resumir_anexo_tabela)
+                    df_roubo_view['link_direto'] = df_roubo_view['anexo_bo'].apply(_extrair_link_externo)
+                    df_roubo_view['anexo_bo'] = df_roubo_view['anexo_bo'].apply(
+                        lambda v: _resumir_anexo_tabela(v) if str(v or "").startswith("B64|") else ""
+                    )
 
-                st.dataframe(df_roubo_view, use_container_width=True, hide_index=True, height=340)
+                st.dataframe(
+                    df_roubo_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=340,
+                    column_config={
+                        "link_direto": st.column_config.LinkColumn(
+                            "Link B.O.",
+                            help="Clique para abrir o link externo em nova aba",
+                            display_text="🔗 Abrir Link"
+                        ),
+                        "anexo_bo": st.column_config.TextColumn("Arquivo Anexado")
+                    }
+                )
 
                 col_dl1, col_dl2 = st.columns([2, 1])
                 with col_dl1:
-                    com_anexo = df_roubo[df_roubo['anexo_bo'].astype(str).str.startswith("B64|")] if 'anexo_bo' in df_roubo.columns else pd.DataFrame()
-                    if not com_anexo.empty:
-                        op_anexos = com_anexo.apply(lambda r: f"{r['id_ocorrencia']} | Pat: {r['patrimonio']} | B.O.: {r['num_bo']}", axis=1).tolist()
-                        sel_anexo = st.selectbox("📎 Baixar B.O. Anexado:", op_anexos, key="sel_dl_bo")
+                    com_evidencia = df_roubo[df_roubo['anexo_bo'].astype(str).str.strip() != ""] if 'anexo_bo' in df_roubo.columns else pd.DataFrame()
+                    if not com_evidencia.empty:
+                        op_anexos = com_evidencia.apply(lambda r: f"{r['id_ocorrencia']} | Pat: {r['patrimonio']} | B.O.: {r['num_bo']}", axis=1).tolist()
+                        sel_anexo = st.selectbox("📎 Acessar / Baixar B.O.:", op_anexos, key="sel_dl_bo")
                         id_sel_dl = sel_anexo.split(" | ")[0]
-                        raw_anexo = com_anexo[com_anexo['id_ocorrencia'] == id_sel_dl].iloc[0]['anexo_bo']
-                        nome_arq, mime_arq, bytes_arq = _extrair_anexo_download(raw_anexo)
-                        if bytes_arq:
-                            st.download_button(
-                                f"📥 Baixar Arquivo ({nome_arq})",
-                                data=bytes_arq,
-                                file_name=nome_arq,
-                                mime=mime_arq,
-                                type="primary"
-                            )
+                        raw_anexo = com_evidencia[com_evidencia['id_ocorrencia'] == id_sel_dl].iloc[0]['anexo_bo']
+
+                        if str(raw_anexo).startswith("B64|"):
+                            nome_arq, mime_arq, bytes_arq = _extrair_anexo_download(raw_anexo)
+                            if bytes_arq:
+                                st.download_button(
+                                    f"📥 Baixar Arquivo ({nome_arq})",
+                                    data=bytes_arq,
+                                    file_name=nome_arq,
+                                    mime=mime_arq,
+                                    type="primary"
+                                )
+                        else:
+                            url_bo = _extrair_link_externo(raw_anexo)
+                            if url_bo:
+                                st.link_button("🔗 Abrir Link Externo do B.O.", url_bo, type="primary")
                 with col_dl2:
                     st.write("")
                     st.download_button(
