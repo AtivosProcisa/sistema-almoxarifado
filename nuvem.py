@@ -1008,3 +1008,30 @@ def render_leitor_qrcode_mobile(chave_prefixo, placeholder_texto="Ex: US-AC1N1P9
         st.session_state[state_val_key] = codigo_digitado
 
     return str(codigo_digitado).strip().upper()
+COLUNAS_ROUBO_FURTO = [
+    'id_ocorrencia', 'equipamento', 'fabricante_modelo', 'numero_serie', 'patrimonio',
+    'base_localizacao', 'responsavel', 'data_ocorrencia', 'tipo', 'num_bo',
+    'data_bo', 'anexo_bo', 'status', 'data_baixa', 'observacao'
+]
+
+COLUNAS_SEM_GIRO = [
+    'id_registro', 'equipamento', 'marca_modelo', 'numero_serie', 'patrimonio',
+    'base', 'data_ultima_mov', 'dias_sem_giro', 'faixa_aging', 'motivo_segregacao',
+    'condicao', 'destinacao_proposta', 'data_segregacao', 'responsavel',
+    'aprovacao', 'data_aprovacao', 'status', 'data_baixa', 'observacao'
+]
+
+COLUNAS_DESCARTE_EQP = [
+    'id_registro', 'data_segregacao', 'base', 'localizacao_fisica', 'tipo_equipamento',
+    'marca', 'modelo', 'numero_serie', 'patrimonio', 'estado_conservacao',
+    'motivo_segregacao', 'destinacao_proposta', 'data_avaliacao', 'responsavel_avaliacao',
+    'evidencia', 'aprovacao_descarte', 'aprovador', 'data_aprovacao', 'status',
+    'data_descarte', 'comprovante', 'data_baixa', 'observacoes'
+]
+
+@st.cache_data(ttl=5)
+def carregar_dados_governanca_eqp():
+    df_roubo = _ler_tabela_segura('eqp_roubo_furto', COLUNAS_ROUBO_FURTO)
+    df_sem_giro = _ler_tabela_segura('eqp_sem_giro', COLUNAS_SEM_GIRO)
+    df_descarte = _ler_tabela_segura('eqp_descarte', COLUNAS_DESCARTE_EQP)
+    return df_roubo, df_sem_giro, df_descarte
