@@ -1,3 +1,4 @@
+import base64
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -63,6 +64,38 @@ def classificar_faixa_aging(dias):
     else:
         return "🔴 > 365 dias (Candidato Obsolescência/Descarte)"
 
+def _codificar_anexo_bo(arquivo_up):
+    """Converte o arquivo do B.O. (PDF/imagem) para string Base64 compacta para salvar na coluna anexo_bo."""
+    if arquivo_up is None:
+        return ""
+    conteudo = arquivo_up.getvalue()
+    if len(conteudo) > 4 * 1024 * 1024:
+        st.warning("⚠️ O arquivo excede 4 MB. Envie um PDF/imagem mais leve ou informe um link externo.")
+        return ""
+    b64 = base64.b64encode(conteudo).decode("utf-8")
+    nome_limpo = str(arquivo_up.name).replace("|", "_")
+    mime = arquivo_up.type or "application/octet-stream"
+    return f"B64|{nome_limpo}|{mime}|{b64}"
+
+def _resumir_anexo_tabela(val):
+    txt = str(val or "").strip()
+    if txt.startswith("B64|"):
+        partes = txt.split("|", 3)
+        if len(partes) >= 2:
+            return f"📎 {partes[1]}"
+    return txt
+
+def _extrair_anexo_download(val):
+    txt = str(val or "").strip()
+    if txt.startswith("B64|"):
+        partes = txt.split("|", 3)
+        if len(partes) == 4:
+            try:
+                return partes[1], partes[2], base64.b64decode(partes[3])
+            except Exception:
+                return None, None, None
+    return None, None, None
+
 def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
     st.subheader("🚨 Governança de Ativos — Roubo/Furto, Sem Giro (Aging) e Descarte")
@@ -89,12 +122,37 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
 
         with sub_r1:
             if not df_roubo.empty:
-                st.dataframe(df_roubo, use_container_width=True, hide_index=True, height=380)
-                st.download_button(
-                    "📥 Exportar Roubados/Furtados (.xlsx)",
-                    data=converter_df_excel_simples(df_roubo, "Roubo_Furto"),
-                    file_name=f"Equipamentos_Roubo_Furto_{datetime.now().strftime('%Y%m%d')}.xlsx"
-                )
+                df_roubo_view = df_roubo.copy()
+                if 'anexo_bo' in df_roubo_view.columns:
+                    df_roubo_view['anexo_bo'] = df_roubo_view['anexo_bo'].apply(_resumir_anexo_tabela)
+
+                st.dataframe(df_roubo_view, use_container_width=True, hide_index=True, height=340)
+
+                col_dl1, col_dl2 = st.columns([2, 1])
+                with col_dl1:
+                    com_anexo = df_roubo[df_roubo['anexo_bo'].astype(str).str.startswith("B64|")] if 'anexo_bo' in df_roubo.columns else pd.DataFrame()
+                    if not com_anexo.empty:
+                        op_anexos = com_anexo.apply(lambda r: f"{r['id_ocorrencia']} | Pat: {r['patrimonio']} | B.O.: {r['num_bo']}", axis=1).tolist()
+                        sel_anexo = st.selectbox("📎 Baixar B.O. Anexado:", op_anexos, key="sel_dl_bo")
+                        id_sel_dl = sel_anexo.split(" | ")[0]
+                        raw_anexo = com_anexo[com_anexo['id_ocorrencia'] == id_sel_dl].iloc[0]['anexo_bo']
+                        nome_arq, mime_arq, bytes_arq = _extrair_anexo_download(raw_anexo)
+                        if bytes_arq:
+                            st.download_button(
+                                f"📥 Baixar Arquivo ({nome_arq})",
+                                data=bytes_arq,
+                                file_name=nome_arq,
+                                mime=mime_arq,
+                                type="primary"
+                            )
+                with col_dl2:
+                    st.write("")
+                    st.download_button(
+                        "📥 Exportar Tabela (.xlsx)",
+                        data=converter_df_excel_simples(df_roubo_view, "Roubo_Furto"),
+                        file_name=f"Equipamentos_Roubo_Furto_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        use_container_width=True
+                    )
             else:
                 st.info("Nenhuma ocorrência de roubo ou furto registrada.")
 
@@ -116,13 +174,15 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                     with c2:
                         num_bo = st.text_input("Nº do B.O.")
                         dt_bo = st.text_input("Data do B.O. (DD/MM/AAAA ou AAAA-MM-DD)")
-                        anexo_bo = st.text_input("Link / Referência do Anexo do B.O.")
+                        arq_bo_up = st.file_uploader("📎 Anexar B.O. (PDF, JPG ou PNG - máx. 4 MB)", type=["pdf", "png", "jpg", "jpeg"], key="up_bo_novo")
+                        link_bo = st.text_input("Ou Link Externo do B.O. (Opcional)")
                     with c3:
                         st_oc = st.selectbox("Status da Ocorrência *", STATUS_ROUBO_FURTO, index=0)
                         obs_oc = st.text_area("Observações / Relato:")
 
                     if st.form_submit_button("🚨 Registrar Ocorrência e Bloquear Equipamento", type="primary"):
                         id_oc = f"RF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                        anexo_final = _codificar_anexo_bo(arq_bo_up) if arq_bo_up is not None else link_bo.strip()
                         novo_rf = {
                             'id_ocorrencia': id_oc,
                             'equipamento': str(r_at.get('equipamento', '')),
@@ -135,7 +195,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                             'tipo': tipo_oc,
                             'num_bo': num_bo.strip(),
                             'data_bo': dt_bo.strip(),
-                            'anexo_bo': anexo_bo.strip(),
+                            'anexo_bo': anexo_final,
                             'status': st_oc,
                             'data_baixa': datetime.now().strftime('%Y-%m-%d') if st_oc == "Baixado" else "",
                             'observacao': obs_oc.strip()
@@ -162,13 +222,18 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                 id_rf_ed = sel_rf.split(" | ")[0]
                 reg_rf = df_roubo[df_roubo['id_ocorrencia'] == id_rf_ed].iloc[0].to_dict()
 
+                anexo_atual_resumo = _resumir_anexo_tabela(reg_rf.get('anexo_bo', ''))
+                if anexo_atual_resumo:
+                    st.info(f"Anexo atual: **{anexo_atual_resumo}**")
+
                 with st.form("form_ed_roubo"):
                     e1, e2, e3 = st.columns(3)
                     with e1:
                         ed_bo = st.text_input("Nº do B.O.", value=str(reg_rf.get('num_bo', '')))
                         ed_dt_bo = st.text_input("Data do B.O.", value=str(reg_rf.get('data_bo', '')))
                     with e2:
-                        ed_anexo = st.text_input("Anexo / Link B.O.", value=str(reg_rf.get('anexo_bo', '')))
+                        ed_arq_bo = st.file_uploader("📎 Anexar / Substituir B.O. (PDF, JPG ou PNG)", type=["pdf", "png", "jpg", "jpeg"], key="up_bo_edit")
+                        ed_link_bo = st.text_input("Ou Link Externo B.O.", value="" if str(reg_rf.get('anexo_bo', '')).startswith("B64|") else str(reg_rf.get('anexo_bo', '')))
                         st_atual_rf = str(reg_rf.get('status', 'Em análise'))
                         ed_st_rf = st.selectbox("Status:", STATUS_ROUBO_FURTO, index=STATUS_ROUBO_FURTO.index(st_atual_rf) if st_atual_rf in STATUS_ROUBO_FURTO else 0)
                     with e3:
@@ -176,10 +241,17 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
 
                     if st.form_submit_button("💾 Atualizar Ocorrência", type="primary"):
                         dt_bx = datetime.now().strftime('%Y-%m-%d') if ed_st_rf == "Baixado" else str(reg_rf.get('data_baixa', ''))
+                        if ed_arq_bo is not None:
+                            anexo_upd = _codificar_anexo_bo(ed_arq_bo)
+                        elif ed_link_bo.strip():
+                            anexo_upd = ed_link_bo.strip()
+                        else:
+                            anexo_upd = str(reg_rf.get('anexo_bo', ''))
+
                         supabase.table('eqp_roubo_furto').update({
                             'num_bo': ed_bo.strip(),
                             'data_bo': ed_dt_bo.strip(),
-                            'anexo_bo': ed_anexo.strip(),
+                            'anexo_bo': anexo_upd,
                             'status': ed_st_rf,
                             'data_baixa': dt_bx,
                             'observacao': ed_obs_rf.strip()
@@ -397,7 +469,6 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                                 'data_baixa': '',
                                 'observacoes': obs_d.strip()
                             }).execute()
-                            # Bloqueio imediato na base principal (sem baixar ainda!)
                             supabase.table('ativos_master').update({
                                 'status_sistema': 'Segregado para Descarte',
                                 'cautela': loc_fis_d.strip(),
@@ -432,7 +503,6 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         obs_ed_d = st.text_area("Observações / Histórico:", value=str(reg_ds.get('observacoes', '')))
 
                     if st.form_submit_button("💾 Atualizar Etapa do Descarte", type="primary"):
-                        # Controle 2: Evidência obrigatória antes de avançar para Aprovado / Descartado / Baixado
                         etapas_criticas = ["Aprovado para descarte", "Descartado", "Baixado"]
                         if novo_st_d in etapas_criticas:
                             if not evid_ed.strip() or nova_ap_d != "Aprovado" or not aprovador_d.strip():
@@ -457,7 +527,6 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
 
                         supabase.table('eqp_descarte').update(upd_ds).eq('id_registro', id_ds_ed).execute()
 
-                        # Sincroniza status com ativos_master sem excluir o histórico (Rastreabilidade)
                         if novo_st_d == "Baixado":
                             supabase.table('ativos_master').update({'status_sistema': 'Baixado', 'atualizado_em': hoje_s}).eq('patrimonio', reg_ds['patrimonio']).execute()
                         elif novo_st_d.startswith("Reaproveitamento aprovado"):
