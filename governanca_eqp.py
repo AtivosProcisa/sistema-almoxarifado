@@ -134,10 +134,12 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
             if not df_roubo.empty:
                 df_roubo_view = df_roubo.copy()
                 if 'anexo_bo' in df_roubo_view.columns:
-                    df_roubo_view['link_direto'] = df_roubo_view['anexo_bo'].apply(_extrair_link_externo)
+                    links_series = df_roubo_view['anexo_bo'].apply(_extrair_link_externo)
                     df_roubo_view['anexo_bo'] = df_roubo_view['anexo_bo'].apply(
                         lambda v: _resumir_anexo_tabela(v) if str(v or "").startswith("B64|") else ""
                     )
+                    pos_bo = df_roubo_view.columns.get_loc('num_bo') + 1 if 'num_bo' in df_roubo_view.columns else 0
+                    df_roubo_view.insert(pos_bo, 'link_direto', links_series)
 
                 st.dataframe(
                     df_roubo_view,
@@ -147,7 +149,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                     column_config={
                         "link_direto": st.column_config.LinkColumn(
                             "Link B.O.",
-                            help="Clique para abrir o link externo em nova aba",
+                            help="Clique para abrir o link externo (OneDrive/SharePoint) em nova aba",
                             display_text="🔗 Abrir Link"
                         ),
                         "anexo_bo": st.column_config.TextColumn("Arquivo Anexado")
@@ -207,7 +209,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         num_bo = st.text_input("Nº do B.O.")
                         dt_bo = st.text_input("Data do B.O. (DD/MM/AAAA ou AAAA-MM-DD)")
                         arq_bo_up = st.file_uploader("📎 Anexar B.O. (PDF, JPG ou PNG - máx. 4 MB)", type=["pdf", "png", "jpg", "jpeg"], key="up_bo_novo")
-                        link_bo = st.text_input("Ou Link Externo do B.O. (Opcional)")
+                        link_bo = st.text_input("Ou Link Externo do B.O. (OneDrive / SharePoint)")
                     with c3:
                         st_oc = st.selectbox("Status da Ocorrência *", STATUS_ROUBO_FURTO, index=0)
                         obs_oc = st.text_area("Observações / Relato:")
@@ -265,7 +267,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         ed_dt_bo = st.text_input("Data do B.O.", value=str(reg_rf.get('data_bo', '')))
                     with e2:
                         ed_arq_bo = st.file_uploader("📎 Anexar / Substituir B.O. (PDF, JPG ou PNG)", type=["pdf", "png", "jpg", "jpeg"], key="up_bo_edit")
-                        ed_link_bo = st.text_input("Ou Link Externo B.O.", value="" if str(reg_rf.get('anexo_bo', '')).startswith("B64|") else str(reg_rf.get('anexo_bo', '')))
+                        ed_link_bo = st.text_input("Ou Link Externo B.O. (OneDrive / SharePoint)", value="" if str(reg_rf.get('anexo_bo', '')).startswith("B64|") else str(reg_rf.get('anexo_bo', '')))
                         st_atual_rf = str(reg_rf.get('status', 'Em análise'))
                         ed_st_rf = st.selectbox("Status:", STATUS_ROUBO_FURTO, index=STATUS_ROUBO_FURTO.index(st_atual_rf) if st_atual_rf in STATUS_ROUBO_FURTO else 0)
                     with e3:
@@ -439,7 +441,22 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
 
         with sub_d1:
             if not df_descarte.empty:
-                st.dataframe(df_descarte, use_container_width=True, hide_index=True, height=380)
+                df_desc_view = df_descarte.copy()
+                if 'evidencia' in df_desc_view.columns:
+                    df_desc_view['evidencia'] = df_desc_view['evidencia'].apply(lambda v: _extrair_link_externo(v) or v)
+                if 'comprovante' in df_desc_view.columns:
+                    df_desc_view['comprovante'] = df_desc_view['comprovante'].apply(lambda v: _extrair_link_externo(v) or v)
+
+                st.dataframe(
+                    df_desc_view,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=380,
+                    column_config={
+                        "evidencia": st.column_config.LinkColumn("Evidência (OneDrive)", display_text="🔗 Abrir Evidência"),
+                        "comprovante": st.column_config.LinkColumn("Comprovante (OneDrive)", display_text="🔗 Abrir Comprovante")
+                    }
+                )
                 st.download_button(
                     "📥 Exportar Segregados para Descarte (.xlsx)",
                     data=converter_df_excel_simples(df_descarte, "Segregados_Descarte"),
@@ -467,7 +484,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         dest_d = st.selectbox("Destinação Proposta *", ["Descarte", "Sucata", "Reciclagem", "Devolução"])
                         resp_av_d = st.text_input("Responsável pela Segregação / Avaliação *", value=st.session_state.get('nome_real', ''))
                     with d3:
-                        evid_d = st.text_input("Evidência (Link Foto / Laudo Técnico) *")
+                        evid_d = st.text_input("Evidência (Link OneDrive Foto / Laudo) *")
                         obs_d = st.text_area("Justificativa / Observações (Obrigatório se 'Outro'):")
 
                     if st.form_submit_button("🔒 Segregar Equipamento e Bloquear Movimentação", type="primary"):
@@ -529,8 +546,8 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         nova_ap_d = st.selectbox("Aprovação do Descarte:", op_apd, index=op_apd.index(ap_at_d) if ap_at_d in op_apd else 0)
                         aprovador_d = st.text_input("Aprovador:", value=str(reg_ds.get('aprovador', '')) or st.session_state.get('nome_real', ''))
                     with f2:
-                        evid_ed = st.text_input("Evidência (Foto / Laudo Técnico) *:", value=str(reg_ds.get('evidencia', '')))
-                        comp_ed = st.text_input("Comprovante de Descarte (MTR / Recibo):", value=str(reg_ds.get('comprovante', '')))
+                        evid_ed = st.text_input("Evidência (Link OneDrive Foto / Laudo) *:", value=str(reg_ds.get('evidencia', '')))
+                        comp_ed = st.text_input("Comprovante de Descarte (Link OneDrive MTR / Recibo):", value=str(reg_ds.get('comprovante', '')))
                     with f3:
                         obs_ed_d = st.text_area("Observações / Histórico:", value=str(reg_ds.get('observacoes', '')))
 
