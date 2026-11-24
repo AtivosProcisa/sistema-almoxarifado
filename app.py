@@ -13,12 +13,14 @@ import pdf_termo
 import operacao
 import gestor
 import ferramental
+import governanca_eqp
 
 importlib.reload(nuvem)
 importlib.reload(pdf_termo)
 importlib.reload(operacao)
 importlib.reload(gestor)
 importlib.reload(ferramental)
+importlib.reload(governanca_eqp)
 
 supabase = nuvem.supabase
 carregar_dados = nuvem.carregar_dados
@@ -33,6 +35,12 @@ if not supabase:
 
 df_ativos, df_mov, df_termos, df_diverg, df_usuarios, df_logs, df_empregados = carregar_dados()
 df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer, df_conc_d365 = carregar_dados_ferramental()
+
+fn_carregar_gov = getattr(nuvem, 'carregar_dados_governanca_eqp', None)
+if fn_carregar_gov:
+    df_roubo, df_sem_giro, df_descarte = fn_carregar_gov()
+else:
+    df_roubo, df_sem_giro, df_descarte = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # ==========================================
 # VISÃO GERAL EXECUTIVA DE EQUIPAMENTOS (7 PERGUNTAS DE GESTÃO)
@@ -50,7 +58,7 @@ def render_dashboard_executivo_eqp_fallback(df_ativos, df_mov, df_termos, df_div
     st_s = df_ativos['status_sistema'].astype(str).str.upper().str.strip()
     cd_s = df_ativos['condicoes_para_uso'].astype(str).str.upper().str.strip()
     dias_s = df_ativos['atualizado_em'].apply(lambda d: int(calcular_dias_sem_mov(d)) if str(calcular_dias_sem_mov(d)).isdigit() else 0)
-    mask_ativos = st_s != 'BAIXADO'
+    mask_ativos = ~st_s.isin(['BAIXADO', 'ROUBADO/FURTADO', 'SEGREGADO PARA DESCARTE'])
 
     # 1 & 2. Quantos existem, disponíveis, em uso ou indisponíveis?
     total_eqp = len(df_ativos)
@@ -60,7 +68,7 @@ def render_dashboard_executivo_eqp_fallback(df_ativos, df_mov, df_termos, df_div
 
     # 5. Em manutenção, inoperantes ou sem movimentação
     qtd_manut = int((st_s.str.contains('MANUTEN', na=False)).sum())
-    qtd_inop = int(((st_s == 'BAIXADO') | cd_s.str.contains('INSERV|REPROV|INAPTO', na=False)).sum())
+    qtd_inop = int(((st_s.isin(['BAIXADO', 'ROUBADO/FURTADO', 'SEGREGADO PARA DESCARTE'])) | cd_s.str.contains('INSERV|REPROV|INAPTO', na=False)).sum())
     qtd_parados = int(((dias_s > 90) & mask_ativos).sum())
 
     st.markdown("##### 1️⃣ & 2️⃣ Quantos equipamentos existem e qual a disponibilidade?")
@@ -68,12 +76,12 @@ def render_dashboard_executivo_eqp_fallback(df_ativos, df_mov, df_termos, df_div
     k1.metric("📦 Total de Equipamentos", total_eqp)
     k2.metric("🟢 Disponíveis", qtd_disp, f"{(qtd_disp/max(1,total_eqp))*100:.1f}% do parque")
     k3.metric("🔵 Em Uso (Em Campo)", qtd_uso, f"{(qtd_uso/max(1,total_eqp))*100:.1f}% do parque")
-    k4.metric("🔴 Indisponíveis (Manut./Baixado/Trânsito)", qtd_indisp, f"{(qtd_indisp/max(1,total_eqp))*100:.1f}% do parque")
+    k4.metric("🔴 Indisponíveis (Manut./Baixado/Segreg.)", qtd_indisp, f"{(qtd_indisp/max(1,total_eqp))*100:.1f}% do parque")
 
     st.markdown("##### 5️⃣ Quantos estão em manutenção, inoperantes ou sem movimentação?")
     m1, m2, m3 = st.columns(3)
     m1.metric("🟠 Em Manutenção / Laboratório", qtd_manut)
-    m2.metric("⛔ Inoperantes (Reprovados / Inservíveis / Baixados)", qtd_inop)
+    m2.metric("⛔ Inoperantes (Segregados / Roubo / Baixados)", qtd_inop)
     m3.metric("⏳ Sem Movimentação (> 90 Dias)", qtd_parados)
 
     st.divider()
@@ -229,6 +237,7 @@ if segmento.startswith("📦"):
             "4. 📄 Gestão de Termos e Divergências",
             "5. 🔬 Diagnóstico (Laboratório)",
             "8. 📷 Modo Operador (QR Code / Endereço)",
+            "9. 🚨 Roubo, Sem Giro e Descarte",
             "6. 👥 Gestão de Usuários (Admin)",
             "7. 🛡️ Auditoria Geral (Gestor)"
         ]
@@ -244,7 +253,8 @@ if segmento.startswith("📦"):
             "2. 📝 Solicitação de Movimentação", 
             "3. ✅ Central de Validações (Almoxarifado)",
             "4. 📄 Gestão de Termos e Divergências",
-            "8. 📷 Modo Operador (QR Code / Endereço)"
+            "8. 📷 Modo Operador (QR Code / Endereço)",
+            "9. 🚨 Roubo, Sem Giro e Descarte"
         ]
     elif st.session_state.perfil in ['Laboratório', 'Laboratorio']:
         opcoes_menu = ["5. 🔬 Diagnóstico (Laboratório)"]
@@ -324,6 +334,8 @@ if selecao:
         operacao.render_modulo_laboratorio(df_ativos)
     elif selecao.startswith("8"):
         operacao.render_operador_qrcode_eqp(df_ativos, df_empregados)
+    elif selecao.startswith("9"):
+        governanca_eqp.render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte)
     elif selecao.startswith("F0"):
         ferramental.render_dashboard_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer)
     elif selecao.startswith("F1"):
