@@ -12,6 +12,7 @@ import operacao
 import gestor
 import ferramental
 import governanca_eqp
+import dashboard_graficos
 
 importlib.reload(nuvem)
 importlib.reload(pdf_termo)
@@ -19,6 +20,7 @@ importlib.reload(operacao)
 importlib.reload(gestor)
 importlib.reload(ferramental)
 importlib.reload(governanca_eqp)
+importlib.reload(dashboard_graficos)
 
 supabase = nuvem.supabase
 carregar_dados = nuvem.carregar_dados
@@ -118,7 +120,11 @@ def fazer_login(usuario, senha):
     s_clean = str(senha).strip()
     match = df_usuarios[(df_usuarios['usuario'] == u_clean) & (df_usuarios['senha'] == s_clean)]
     if not match.empty:
-        perfil_norm = normalizar_perfil(match.iloc[0]['perfil'])
+        perfil_bruto = str(match.iloc[0]['perfil']).strip()
+        if perfil_bruto.lower() == "bloqueado":
+            st.error("⛔ Seu acesso está bloqueado. Contate o Supervisor do Almoxarifado.")
+            return
+        perfil_norm = normalizar_perfil(perfil_bruto)
         st.session_state.logged_in = True
         st.session_state.usuario = match.iloc[0]['usuario']
         st.session_state.nome_real = match.iloc[0]['nome']
@@ -185,6 +191,7 @@ if segmento.startswith("📦"):
     st.sidebar.subheader("Módulos: Equipamentos")
     if perfil_user == "Supervisor":
         opcoes_menu = [
+            "0.1. 📈 Dashboard Gráficos",
             "0. 📊 Dashboard (Visão Geral)",
             "1. 📋 Painel (Controle de Equipamentos)",
             "2. 📝 Solicitação de Movimentação",
@@ -198,6 +205,7 @@ if segmento.startswith("📦"):
         ]
     elif perfil_user == "Armazenista":
         opcoes_menu = [
+            "0.1. 📈 Dashboard Gráficos",
             "0. 📊 Dashboard (Operacional)",
             "1. 📋 Painel (Controle de Equipamentos)",
             "2. 📝 Solicitação de Movimentação",
@@ -210,6 +218,7 @@ if segmento.startswith("📦"):
         ]
     else:  # Operação Procisa
         opcoes_menu = [
+            "0.1. 📈 Dashboard Gráficos",
             "0. 📊 Dashboard (Consulta)",
             "1. 📋 Painel (Consulta de Equipamentos)",
             "2. 📝 Solicitar Movimentação",
@@ -220,6 +229,7 @@ else:
     st.sidebar.subheader("Módulos: Ferramental Usado")
     if perfil_user == "Supervisor":
         opcoes_menu = [
+            "F0.1. 📈 Dashboard Gráficos",
             "F0. 📊 Dashboard (Visão Geral)",
             "F1. 📋 Painel (Controle Operacional)",
             "F6. 📷 Modo Operador (QR Code / Endereço)",
@@ -232,6 +242,7 @@ else:
         ]
     elif perfil_user == "Armazenista":
         opcoes_menu = [
+            "F0.1. 📈 Dashboard Gráficos",
             "F0. 📊 Dashboard (Operacional)",
             "F1. 📋 Painel (Controle Operacional)",
             "F6. 📷 Modo Operador (QR Code / Endereço)",
@@ -243,6 +254,7 @@ else:
         ]
     else:  # Operação Procisa
         opcoes_menu = [
+            "F0.1. 📈 Dashboard Gráficos",
             "F0. 📊 Dashboard (Consulta)",
             "F1. 📋 Painel (Consulta Ferramental)",
             "7. 🛡️ Minhas Movimentações"
@@ -269,7 +281,9 @@ st.sidebar.markdown(
 selecao = st.session_state.modulo_ativo
 
 if selecao:
-    if selecao.startswith("0"):
+    if selecao.startswith("0.1"):
+        dashboard_graficos.render_dashboard_graficos(df_ativos, df_mov, df_termos, df_diverg, df_roubo, df_descarte, modo="equipamentos")
+    elif selecao.startswith("0"):
         render_dashboard_executivo_eqp_fallback(df_ativos, df_mov, df_termos, df_diverg)
     elif selecao.startswith("1"):
         gestor.render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados)
@@ -285,6 +299,8 @@ if selecao:
         operacao.render_operador_qrcode_eqp(df_ativos, df_empregados)
     elif selecao.startswith("9"):
         governanca_eqp.render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte)
+    elif selecao.startswith("F0.1"):
+        dashboard_graficos.render_dashboard_graficos(df_fer, df_mov_fer, df_caut_fer, None, None, None, modo="ferramental")
     elif selecao.startswith("F0"):
         ferramental.render_dashboard_ferramental(df_fer, df_mov_fer, df_caut_fer, df_manut_fer, df_baixa_fer)
     elif selecao.startswith("F1"):
