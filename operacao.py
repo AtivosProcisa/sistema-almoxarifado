@@ -234,7 +234,7 @@ def _montar_df_pdf_equipamentos(df_ativos_selecionados, coord_padrao="", nf_padr
     return pd.DataFrame(linhas_pdf)
 
 # ==========================================
-# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (COM BLOQUEIO DE SEGREGADOS/ROUBADOS)
+# MÓDULO 2: SOLICITAÇÃO DE MOVIMENTAÇÃO (COM LABORATÓRIOS RJ/SP E BLOQUEIO DE SEGREGADOS/ROUBADOS)
 # ==========================================
 def render_modulo_solicitacao(df_ativos, df_empregados):
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
@@ -245,13 +245,15 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
         "MOV-01 | Almoxarifado -> Colaborador", 
         "MOV-02 | Colaborador -> Almoxarifado", 
         "MOV-03 | Unidade -> Unidade", 
-        "MOV-04 | Almoxarifado -> Laboratório",
-        "MOV-05 | Laboratório -> Almoxarifado"
+        "MOV-04.1 | Almoxarifado -> Laboratório RJ",
+        "MOV-04.2 | Almoxarifado -> Laboratório SP",
+        "MOV-05.1 | Laboratório RJ -> Almoxarifado",
+        "MOV-05.2 | Laboratório SP -> Almoxarifado"
     ]
     c_top1, c_top2 = st.columns(2)
     with c_top1:
         tipo_mov = st.selectbox("1️⃣ Selecione o Tipo de Movimentação:", opcoes_mov)
-        cod_tipo = tipo_mov[:6]
+        cod_tipo = tipo_mov.split(" | ")[0].strip()
     
     matricula_busca = ""
     unidade_escolhida = ""
@@ -300,17 +302,24 @@ def render_modulo_solicitacao(df_ativos, df_empregados):
             projeto_auto = emp_dict.get('projeto', primeiro_reg.get('projeto', ''))
             coord_auto = emp_dict.get('unidade', primeiro_reg.get('coordenacao', ''))
             mat_auto = emp_dict.get('matricula', limpar_texto_matricula(matricula_busca))
-        elif cod_tipo in ["MOV-02", "MOV-05"]:
-            if cod_tipo == "MOV-05":
-                origem_auto = "LABORATÓRIO TÉCNICO - PROCISA"
+        elif cod_tipo in ["MOV-02", "MOV-05.1", "MOV-05.2"]:
+            if cod_tipo == "MOV-05.1":
+                origem_auto = "LABORATÓRIO TÉCNICO - RJ"
+            elif cod_tipo == "MOV-05.2":
+                origem_auto = "LABORATÓRIO TÉCNICO - SP"
             destino_auto = "ALMOXARIFADO CENTRAL"
             projeto_auto = "ESTOQUE ALMOXARIFADO"
             coord_auto = "LOGÍSTICA / ALMOXARIFADO"
             mat_auto = ""
-        elif cod_tipo == "MOV-04":
-            destino_auto = "LABORATÓRIO TÉCNICO - PROCISA"
-            projeto_auto = "MANUTENÇÃO / LAB"
-            coord_auto = "LABORATÓRIO"
+        elif cod_tipo == "MOV-04.1":
+            destino_auto = "LABORATÓRIO TÉCNICO - RJ"
+            projeto_auto = "MANUTENÇÃO / LAB RJ"
+            coord_auto = "LABORATÓRIO RJ"
+            mat_auto = ""
+        elif cod_tipo == "MOV-04.2":
+            destino_auto = "LABORATÓRIO TÉCNICO - SP"
+            projeto_auto = "MANUTENÇÃO / LAB SP"
+            coord_auto = "LABORATÓRIO SP"
             mat_auto = ""
         elif cod_tipo == "MOV-03":
             destino_auto = unidade_escolhida
@@ -485,9 +494,9 @@ def render_modulo_validacoes(df_ativos, df_mov, df_termos, df_empregados):
             st.info(f"**Itens neste processo ({len(pats_lote)}):** `{', '.join(pats_lote)}` | **Destinatário:** {cautela_sugerida} (Mat: {mat_res})")
 
             opcoes_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"]
-            if tipo_m in ["MOV-02", "MOV-05"] or 'ALMOX' in str(mov_ref.get('destino', '')).upper():
+            if tipo_m.startswith("MOV-02") or tipo_m.startswith("MOV-05") or 'ALMOX' in str(mov_ref.get('destino', '')).upper():
                 idx_sugerido = 0
-            elif tipo_m == "MOV-04" or 'LAB' in str(mov_ref.get('destino', '')).upper():
+            elif tipo_m.startswith("MOV-04") or 'LAB' in str(mov_ref.get('destino', '')).upper():
                 idx_sugerido = 2
             else:
                 idx_sugerido = 1
