@@ -23,6 +23,9 @@ expurgar_linhas_nulas_nuvem = nuvem.expurgar_linhas_nulas_nuvem
 carregar_preferencias_colunas = getattr(nuvem, 'carregar_preferencias_colunas', lambda: {})
 salvar_preferencias_colunas = getattr(nuvem, 'salvar_preferencias_colunas', lambda *a, **kw: None)
 calcular_dias_sem_mov = getattr(nuvem, 'calcular_dias_sem_mov', lambda x: "0")
+normalizar_perfil = getattr(nuvem, 'normalizar_perfil', lambda p: p)
+obter_permissao = getattr(nuvem, 'obter_permissao', lambda acao: True)
+PERFIS_OFICIAIS = getattr(nuvem, 'PERFIS_OFICIAIS', ["Supervisor", "Armazenista", "Operação Procisa"])
 
 def inicializar_prefs_nuvem():
     if 'prefs_carregadas_nuvem' not in st.session_state:
@@ -69,7 +72,13 @@ def formatar_badge_alerta_ativo(status_sis, cond_uso, dias_ociosos=0):
     except Exception:
         d_oc = 0
 
-    if d_oc > 90 and st_up not in ["BAIXADO"]:
+    if st_up == "INATIVADO":
+        return "🚫 INATIVADO"
+    if st_up == "ROUBADO/FURTADO":
+        return "🚨 ROUBADO / FURTADO"
+    if st_up == "SEGREGADO PARA DESCARTE":
+        return "🗑️ SEGREGADO DESCARTE"
+    if d_oc > 90 and st_up not in ["BAIXADO", "INATIVADO"]:
         return "⏳ PARADO > 90 DIAS"
     if "INAPTO" in cd_up or "REPROVADO" in cd_up or "INSERV" in cd_up:
         return "🔴 DEFEITO / BLOQUEADO"
@@ -86,14 +95,18 @@ def formatar_badge_alerta_ativo(status_sis, cond_uso, dias_ociosos=0):
     return f"⚪ {st_up}"
 
 # ==========================================
-# MÓDULO 1: PAINEL OPERACIONAL DE EQUIPAMENTOS (COM EDIÇÃO AUDITADA)
+# MÓDULO 1: PAINEL OPERACIONAL DE EQUIPAMENTOS (COM HIERARQUIA RBAC)
 # ==========================================
 def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregados):
     inicializar_prefs_nuvem()
+    perfil_atual = normalizar_perfil(st.session_state.get('perfil', ''))
+    perm_incluir = obter_permissao("incluir_item")
+    perm_editar = obter_permissao("editar_mestre")
+    perm_inativar = obter_permissao("inativar_registro")
+    perm_exportar = obter_permissao("exportar")
 
-    # Espaçamento superior de 2.8rem para impedir corte do título
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-    st.subheader("📦 Painel Operacional — Equipamentos e Ativos")
+    st.subheader(f"📦 Painel Operacional — Equipamentos e Ativos ({perfil_atual})")
 
     if st.session_state.get('resumo_ultima_operacao'):
         info_op = st.session_state.resumo_ultima_operacao
@@ -102,21 +115,25 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
             st.session_state.resumo_ultima_operacao = None
             st.rerun()
 
-    abas_dashboard = [
-        "📋 Estoque Segmentado por Status",
-        "✏️ Editar Equipamento Carregado",
-        "➕ Cadastrar Novo Equipamento", 
-        "📜 Histórico de Movimentações", 
-        "📄 Termos Emitidos", 
-        "📥 Importar / Exportar & Backup"
-    ]
-    if st.session_state.perfil == 'Master':
-        abas_dashboard.append("❌ Excluir Registos (Master)")
-        
-    abas = st.tabs(abas_dashboard)
-    
-    # --- ABA 0: ESTOQUE SEGMENTADO POR STATUS ---
-    with abas[0]:
+    # Montagem dinâmica das abas conforme o nível de acesso
+    abas_nomes = ["📋 Estoque Segmentado por Status"]
+    if perm_editar in ["total", "limitado"]:
+        abas_nomes.append("✏️ Editar Equipamento Carregado")
+    if perm_incluir:
+        abas_nomes.append("➕ Cadastrar Novo Equipamento")
+    if perfil_atual != "Operação Procisa":
+        abas_nomes.append("📜 Histórico de Movimentações")
+        abas_nomes.append("📄 Termos Emitidos")
+    if perm_exportar == "total":
+        abas_nomes.append("📥 Importar / Exportar & Backup")
+    if perm_inativar:
+        abas_nomes.append("🚫 Inativar Registos (Supervisor)")
+
+    abas = st.tabs(abas_nomes)
+    mapa_abas = {nome: aba for nome, aba in zip(abas_nomes, abas)}
+
+    # --- ABA: ESTOQUE SEGMENTADO POR STATUS (TODOS OS PERFIS) ---
+    with mapa_abas["📋 Estoque Segmentado por Status"]:
         cf0, cf1, cf_ex, cf2, cf3, cf4 = st.columns([1.2, 1.8, 0.7, 1.0, 1.0, 0.6])
         with cf0:
             col_f_eq = st.selectbox("Campo:", ["Todos os Campos", "Patrimônio", "Número de Série", "Item D365", "Equipamento / Marca"], label_visibility="collapsed", key="fp_col_eqp")
@@ -154,7 +171,7 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
         cols_para_exibir = [c for c in st.session_state.saved_cols_inv if c in COLUNAS_ATIVOS]
         if not cols_para_exibir:
             cols_para_exibir = list(COLUNAS_ATIVOS)
-        
+
         if not df_ativos.empty:
             df_base = df_ativos.copy()
             for c_at in COLUNAS_ATIVOS:
@@ -193,15 +210,15 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
             df_g_uso = df_base[st_s == 'EM USO']
             df_g_manut = df_base[st_s.str.contains('MANUTEN', na=False) | cd_s.str.contains('REPROV|INAPTO', na=False)]
             df_g_trans = df_base[st_s.str.contains('TRÂNSITO|TRANSITO', na=False)]
-            df_g_baix = df_base[(st_s == 'BAIXADO') | cd_s.str.contains('INSERV', na=False)]
-            df_g_parado = df_base[(dias_oc > 90) & (st_s != 'BAIXADO')]
+            df_g_baix = df_base[(st_s.isin(['BAIXADO', 'INATIVADO', 'ROUBADO/FURTADO', 'SEGREGADO PARA DESCARTE'])) | cd_s.str.contains('INSERV', na=False)]
+            df_g_parado = df_base[(dias_oc > 90) & (~st_s.isin(['BAIXADO', 'INATIVADO']))]
 
             sub_abas_eqp = st.tabs([
                 f"🟢 Disponível ({len(df_g_disp)})",
                 f"🔵 Em Uso / Campo ({len(df_g_uso)})",
                 f"🟠 Em Manutenção / Lab ({len(df_g_manut)})",
                 f"🟡 Em Trânsito ({len(df_g_trans)})",
-                f"⚪ Baixado / Inservível ({len(df_g_baix)})",
+                f"⚪ Baixado / Segregado / Inativo ({len(df_g_baix)})",
                 f"⏳ Parado > 90 Dias ({len(df_g_parado)})"
             ])
 
@@ -221,459 +238,452 @@ def render_modulo_dashboard(df_ativos, df_mov, df_termos, df_diverg, df_empregad
                                 ), axis=1
                             )
                         )
-                        st.dataframe(df_show_e, use_container_width=True, hide_index=True, height=430)
+                        st.dataframe(df_show_e, use_container_width=True, hide_index=True, height=420)
                     else:
                         st.info("Nenhum equipamento enquadrado nesta categoria no momento.")
+
+            # Exportação limitada para Operação Procisa (apenas a consulta filtrada atual)
+            if perm_exportar == "limitado":
+                st.download_button(
+                    "📥 Exportar Consulta Atual (.xlsx)",
+                    data=converter_df_excel_simples(df_base[cols_para_exibir], "Consulta_Equipamentos"),
+                    file_name=f"Consulta_Equipamentos_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                )
         else:
             st.info("Nenhum ativo registado na base no momento.")
 
-    # --- ABA 1: EDITAR EQUIPAMENTO CARREGADO (COM TRILHA DETALHADA NA AUDITORIA) ---
-    with abas[1]:
-        st.subheader("✏️ Editar Informações de Equipamento Carregado")
-        st.caption("Filtre e marque na tabela abaixo o equipamento que deseja alterar manualmente. Todas as mudanças de valor (Antes -> Depois) ficam registradas na aba Auditoria Geral.")
-
-        seletor_fn = getattr(operacao, 'render_seletor_excel_equipamentos', None)
-        if seletor_fn and not df_ativos.empty:
-            df_edit_sel = seletor_fn(df_ativos, "edit_manual_eqp", multiplo=False, altura=190)
-        else:
-            df_edit_sel = pd.DataFrame()
-
-        if not df_edit_sel.empty:
-            reg_antigo = df_edit_sel.iloc[0].to_dict()
-            pat_alvo = str(reg_antigo['patrimonio']).strip()
-
-            st.info(f"🔧 **Editando Patrimônio:** `{pat_alvo}` — {reg_antigo.get('equipamento', '')} {reg_antigo.get('marca', '')} {reg_antigo.get('modelo', '')}")
-
-            with st.form(f"form_editar_ativo_{pat_alvo}"):
-                e1, e2, e3, e4 = st.columns(4)
-                with e1:
-                    st.text_input("Patrimônio (Chave Fixa)", value=pat_alvo, disabled=True)
-                    ed_eqp = st.text_input("Equipamento", value=str(reg_antigo.get('equipamento', '')))
-                    ed_marca = st.text_input("Marca", value=str(reg_antigo.get('marca', '')))
-                    ed_modelo = st.text_input("Modelo", value=str(reg_antigo.get('modelo', '')))
-                with e2:
-                    ed_serie = st.text_input("Número de Série", value=str(reg_antigo.get('numero_serie', '')))
-                    ed_item = st.text_input("Item / Código D365", value=str(reg_antigo.get('item', '')))
-                    ed_valor = st.text_input("Valor (R$)", value=str(reg_antigo.get('valor', '')))
-                    ed_nf = st.text_input("NF Procisa", value=str(reg_antigo.get('nf_procisa', '')))
-                with e3:
-                    ed_cautela = st.text_input("Cautela (Local/Responsável)", value=str(reg_antigo.get('cautela', '')))
-                    ed_end1 = st.text_input("Endereçamento 01 (LOCAL)", value=str(reg_antigo.get('enderecamento_01', '')))
-                    ed_end2 = st.text_input("Endereçamento 02 (Descri. Local)", value=str(reg_antigo.get('enderecamento_02', '')))
-                    op_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"]
-                    st_at = str(reg_antigo.get('status_sistema', 'Disponível'))
-                    ed_status = st.selectbox("Status no Sistema", op_st, index=op_st.index(st_at) if st_at in op_st else 0)
-                with e4:
-                    ed_proj = st.text_input("Projeto", value=str(reg_antigo.get('projeto', '')))
-                    ed_coord = st.text_input("Coordenação", value=str(reg_antigo.get('coordenacao', '')))
-                    op_cd = ["APTO", "APTO COM RESSALVA", "EM MANUTENÇÃO", "REPROVADO", "INSERVÍVEL"]
-                    cd_at = str(reg_antigo.get('condicoes_para_uso', 'APTO')).upper()
-                    ed_cond = st.selectbox("Condições para Uso", op_cd, index=op_cd.index(cd_at) if cd_at in op_cd else 0)
-                    ed_acess = st.text_input("Acessórios / Observações", value=str(reg_antigo.get('acessorios', '')))
-
-                motivo_ed = st.text_input("Motivo da Edição Manual (Para registro na Auditoria):")
-
-                if st.form_submit_button("💾 Salvar Alterações e Auditar", type="primary"):
-                    novos_dados = {
-                        'item': ed_item.strip(),
-                        'valor': ed_valor.strip(),
-                        'equipamento': ed_eqp.strip(),
-                        'marca': ed_marca.strip(),
-                        'modelo': ed_modelo.strip(),
-                        'numero_serie': ed_serie.strip(),
-                        'cautela': ed_cautela.strip(),
-                        'enderecamento_01': ed_end1.strip().upper(),
-                        'enderecamento_02': ed_end2.strip().upper(),
-                        'projeto': ed_proj.strip(),
-                        'coordenacao': ed_coord.strip(),
-                        'nf_procisa': ed_nf.strip(),
-                        'condicoes_para_uso': ed_cond,
-                        'acessorios': ed_acess.strip(),
-                        'status_sistema': ed_status,
-                        'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-                    }
-
-                    mudancas = []
-                    for k_campo, v_novo in novos_dados.items():
-                        if k_campo == 'atualizado_em':
-                            continue
-                        v_ant = str(reg_antigo.get(k_campo, '')).strip()
-                        if v_ant != str(v_novo).strip():
-                            mudancas.append(f"{k_campo}: '{v_ant}' -> '{v_novo}'")
-
-                    if not mudancas:
-                        st.warning("Nenhuma alteração foi detectada nos campos.")
-                    else:
-                        try:
-                            supabase.table('ativos_master').update(novos_dados).eq('patrimonio', pat_alvo).execute()
-                            resumo_mudancas = " | ".join(mudancas)
-                            if motivo_ed.strip():
-                                resumo_mudancas = f"[Motivo: {motivo_ed.strip()}] " + resumo_mudancas
-                            registrar_log_auditoria("EDIÇÃO MANUAL (EQUIPAMENTO)", pat_alvo, resumo_mudancas)
-                            st.session_state.clear() if False else st.cache_data.clear()
-                            st.success(f"✅ Equipamento `{pat_alvo}` atualizado e registrado na Auditoria ({len(mudancas)} campo(s) alterado(s))!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao atualizar equipamento: {e}")
-
-    # --- ABA 2: CADASTRO MANUAL ---
-    with abas[2]:
-        st.subheader("➕ Cadastrar Novo Equipamento")
-        with st.form("form_novo_ativo"):
-            colA, colB, colC, colD = st.columns(4)
-            with colA:
-                cad_patrimonio = st.text_input("Patrimônio / Placa *")
-                cad_equipamento = st.text_input("Equipamento *")
-                cad_marca = st.text_input("Marca")
-                cad_modelo = st.text_input("Modelo")
-            with colB:
-                cad_serie = st.text_input("Número de Série")
-                cad_item = st.text_input("Item / Código D365")
-                cad_valor = st.text_input("Valor (R$)")
-                cad_nf = st.text_input("NF Procisa")
-            with colC:
-                cad_cautela = st.text_input("Cautela (Local/Responsável)", value="ALMOXARIFADO CENTRAL")
-                cad_end1 = st.text_input("Endereçamento 01 (Prateleira)")
-                cad_end2 = st.text_input("Endereçamento 02 (Caixa/Gaveta)")
-                cad_status = st.selectbox("Status no Sistema", ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado"])
-            with colD:
-                cad_projeto = st.text_input("Projeto", value="ESTOQUE ALMOXARIFADO")
-                cad_coord = st.text_input("Coordenação", value="LOGÍSTICA / ALMOXARIFADO")
-                cad_condicao = st.selectbox("Condições para Uso", ["APTO", "APTO COM RESSALVA", "EM MANUTENÇÃO", "REPROVADO", "INSERVÍVEL"])
-                cad_acessorios = st.text_input("Acessórios / Observações")
-            
-            submit_cadastro = st.form_submit_button("💾 Salvar Equipamento na Nuvem", type="primary")
-            
-            if submit_cadastro:
-                if cad_patrimonio.strip():
-                    pat_limpo = cad_patrimonio.strip()
-                    qtd_antes = len(df_ativos)
-                    ja_existia = (not df_ativos.empty) and (pat_limpo in df_ativos['patrimonio'].astype(str).values)
-                    
-                    dados_novo = {
-                        'item': cad_item.strip(),
-                        'valor': cad_valor.strip(),
-                        'equipamento': cad_equipamento.strip(),
-                        'marca': cad_marca.strip(),
-                        'modelo': cad_modelo.strip(),
-                        'numero_serie': cad_serie.strip(),
-                        'patrimonio': pat_limpo,
-                        'cautela': cad_cautela.strip(),
-                        'enderecamento_01': cad_end1.strip().upper(),
-                        'enderecamento_02': cad_end2.strip().upper(),
-                        'projeto': cad_projeto.strip(),
-                        'coordenacao': cad_coord.strip(),
-                        'nf_procisa': cad_nf.strip(),
-                        'atualizado_em': datetime.now().strftime('%Y-%m-%d'),
-                        'condicoes_para_uso': cad_condicao,
-                        'acessorios': cad_acessorios.strip(),
-                        'status_sistema': cad_status
-                    }
-                    
-                    try:
-                        if ja_existia:
-                            supabase.table('ativos_master').update(dados_novo).eq('patrimonio', pat_limpo).execute()
-                            tipo_op = "ATUALIZAÇÃO MANUAL"
-                            qtd_depois = qtd_antes
-                        else:
-                            supabase.table('ativos_master').insert(dados_novo).execute()
-                            tipo_op = "CADASTRO MANUAL"
-                            qtd_depois = qtd_antes + 1
-                            
-                        st.cache_data.clear()
-                        registrar_log_auditoria(tipo_op, pat_limpo, f"Ativo {pat_limpo} ({cad_marca} {cad_modelo}) salvo via formulário.")
-                        
-                        st.session_state.resumo_ultima_operacao = {
-                            'titulo': f"Cadastro/Atualização Concluída ({pat_limpo})",
-                            'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
-                            'qtd_antes': qtd_antes,
-                            'novos': 0 if ja_existia else 1,
-                            'atualizados': 1 if ja_existia else 0,
-                            'qtd_depois': qtd_depois
-                        }
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Erro ao salvar: {err}")
-                else:
-                    st.error("O campo 'Patrimônio' é obrigatório.")
-
-    # --- ABA 3: HISTÓRICO DE MOVIMENTAÇÕES ---
-    with abas[3]:
-        c_hm1, c_hm2 = st.columns([4.3, 0.7])
-        with c_hm1:
-            busca_hm = st.text_input("🔍 Filtrar Histórico de Movimentações:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Mov, Patrimônio, Origem, Destino ou Solicitante...")
-        with c_hm2:
-            with st.popover("👁️ Colunas", use_container_width=True):
-                st.multiselect(
-                    "Colunas (Movimentações):",
-                    options=COLUNAS_MOV,
-                    default=[c for c in st.session_state.saved_cols_mov if c in COLUNAS_MOV],
-                    key="ms_mov_key",
-                    on_change=update_cols_mov,
-                    label_visibility="collapsed"
-                )
-        cols_m_exibir = [c for c in (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else COLUNAS_MOV
-        df_m_show = df_mov.copy()
-        if not df_m_show.empty and busca_hm.strip():
-            tm = busca_hm.strip().lower()
-            df_m_show = df_m_show[df_m_show.astype(str).apply(lambda x: x.str.lower().str.contains(tm, na=False)).any(axis=1)]
-        st.dataframe(df_m_show[cols_m_exibir] if not df_m_show.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True, hide_index=True, height=440)
-
-    # --- ABA 4: TERMOS EMITIDOS ---
-    with abas[4]:
-        c_ht1, c_ht2 = st.columns([4.3, 0.7])
-        with c_ht1:
-            busca_ht = st.text_input("🔍 Filtrar Termos Emitidos:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Termo, Patrimônio, Responsável ou Matrícula...")
-        with c_ht2:
-            with st.popover("👁️ Colunas", use_container_width=True):
-                st.multiselect(
-                    "Colunas (Termos):",
-                    options=COLUNAS_TERMOS,
-                    default=[c for c in st.session_state.saved_cols_trm if c in COLUNAS_TERMOS],
-                    key="ms_trm_key",
-                    on_change=update_cols_trm,
-                    label_visibility="collapsed"
-                )
-        cols_t_exibir = [c for c in (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else COLUNAS_TERMOS
-        df_t_show = df_termos.copy()
-        if not df_t_show.empty and busca_ht.strip():
-            tt = busca_ht.strip().lower()
-            df_t_show = df_t_show[df_t_show.astype(str).apply(lambda x: x.str.lower().str.contains(tt, na=False)).any(axis=1)]
-        st.dataframe(df_t_show[cols_t_exibir] if not df_t_show.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True, hide_index=True, height=440)
-
-    # --- ABA 5: IMPORTAR / EXPORTAR ---
-    with abas[5]:
-        st.subheader("📤 Exportar Relatórios do Sistema (.xlsx)")
-        stamp = datetime.now().strftime('%Y%m%d_%H%M')
-        c_exp1, c_exp2, c_exp3 = st.columns(3)
-        
-        with c_exp1:
-            df_a_exp = df_ativos[[c for c in COLUNAS_ATIVOS if c in df_ativos.columns]] if not df_ativos.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
-            if st.download_button("📥 Baixar Relatório de Ativos (.xlsx)", data=converter_df_excel_simples(df_a_exp, "Ativos"), file_name=f"Ativos_Procisa_{stamp}.xlsx", use_container_width=True):
-                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Ativos", f"Download de {len(df_a_exp)} ativos.")
-                
-            df_e_exp = df_empregados[COLUNAS_EMPREGADOS] if not df_empregados.empty else pd.DataFrame(columns=COLUNAS_EMPREGADOS)
-            if st.download_button("📥 Baixar Base de Colaboradores (.xlsx)", data=converter_df_excel_simples(df_e_exp, "Colaboradores"), file_name=f"Colaboradores_Procisa_{stamp}.xlsx", use_container_width=True):
-                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Colaboradores", f"Download de {len(df_e_exp)} colaboradores.")
-
-        with c_exp2:
-            df_m_exp = df_mov[COLUNAS_MOV] if not df_mov.empty else pd.DataFrame(columns=COLUNAS_MOV)
-            if st.download_button("📥 Baixar Histórico Movimentações (.xlsx)", data=converter_df_excel_simples(df_m_exp, "Movimentacoes"), file_name=f"Movimentacoes_Procisa_{stamp}.xlsx", use_container_width=True):
-                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Movimentações", f"Download de {len(df_m_exp)} movimentações.")
-                
-            df_t_exp = df_termos[COLUNAS_TERMOS] if not df_termos.empty else pd.DataFrame(columns=COLUNAS_TERMOS)
-            if st.download_button("📥 Baixar Relatório de Termos (.xlsx)", data=converter_df_excel_simples(df_t_exp, "Termos"), file_name=f"Termos_Procisa_{stamp}.xlsx", use_container_width=True):
-                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Termos", f"Download de {len(df_t_exp)} termos.")
-
-        with c_exp3:
-            df_d_exp = df_diverg[COLUNAS_DIVERG] if not df_diverg.empty else pd.DataFrame(columns=COLUNAS_DIVERG)
-            if st.download_button("📥 Baixar Relatório Divergências (.xlsx)", data=converter_df_excel_simples(df_d_exp, "Divergencias"), file_name=f"Divergencias_Procisa_{stamp}.xlsx", use_container_width=True):
-                registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Divergências", f"Download de {len(df_d_exp)} divergências.")
-                
-            backup_bytes = gerar_backup_completo_excel({
-                "Ativos_Master": df_a_exp,
-                "Colaboradores": df_e_exp,
-                "Movimentacoes": df_m_exp,
-                "Termos": df_t_exp,
-                "Divergencias": df_d_exp
-            })
-            if st.download_button("📦 Baixar Backup Completo (Multi-Abas)", data=backup_bytes, file_name=f"Backup_Geral_Procisa_{stamp}.xlsx", type="primary", use_container_width=True):
-                registrar_log_auditoria("BACKUP COMPLETO", "Sistema", "Exportação de todas as tabelas em arquivo multi-abas.")
-
-        st.divider()
-        st.subheader("📥 Carga Inicial / Atualização em Massa (Upload)")
-        
-        col_up1, col_up2 = st.columns(2)
-        with col_up1:
-            st.markdown("##### 📦 Planilha de Equipamentos")
-            arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
-            if arquivo_up:
-                try:
-                    df_up = pd.read_excel(arquivo_up)
-                    df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
-                    
-                    if 'status_sistema' not in df_up.columns:
-                        df_up['status_sistema'] = 'Disponível'
-                    if 'enderecamento_01' not in df_up.columns:
-                        df_up['enderecamento_01'] = ''
-                    if 'enderecamento_02' not in df_up.columns:
-                        df_up['enderecamento_02'] = ''
-                    
-                    if 'patrimonio' not in df_up.columns:
-                        st.error(f"A coluna 'patrimonio' não foi encontrada. Colunas lidas: {list(df_up.columns)}")
-                    else:
-                        df_up = df_up[df_up['patrimonio'].apply(matricula_valida)].copy()
-                        df_up['patrimonio'] = df_up['patrimonio'].apply(limpar_texto_matricula)
-                        df_up = df_up.drop_duplicates(subset=['patrimonio'], keep='last')
-                        
-                        atuais_set = set(df_ativos['patrimonio'].astype(str).str.strip()) if not df_ativos.empty else set()
-                        novos_set = set(df_up['patrimonio'])
-                        
-                        qtd_antes = len(atuais_set)
-                        qtd_novos = len(novos_set - atuais_set)
-                        qtd_atualizados = len(novos_set.intersection(atuais_set))
-                        qtd_depois = len(atuais_set.union(novos_set))
-                        
-                        st.caption(f"Antes: **{qtd_antes}** | Novos: **+{qtd_novos}** | Atualizados: **{qtd_atualizados}** | Projeção: **{qtd_depois}**")
-                        st.dataframe(df_up.head(3), use_container_width=True)
-                        
-                        if st.button("🚀 Confirmar e Subir Equipamentos", type="primary"):
-                            with st.spinner("Enviando equipamentos para o Supabase..."):
-                                expurgar_linhas_nulas_nuvem()
-                                if salvar_dados_massa('ativos_master', df_up, COLUNAS_ATIVOS):
-                                    detalhe_log = f"Arquivo '{arquivo_up.name}' enviado. Novos: +{qtd_novos} | Atualizados: {qtd_atualizados}."
-                                    registrar_log_auditoria("UPLOAD PLANILHA", arquivo_up.name, detalhe_log)
-                                    st.session_state.resumo_ultima_operacao = {
-                                        'titulo': f"Envio da planilha '{arquivo_up.name}' concluído!",
-                                        'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
-                                        'qtd_antes': qtd_antes,
-                                        'novos': qtd_novos,
-                                        'atualizados': qtd_atualizados,
-                                        'qtd_depois': qtd_depois
-                                    }
-                                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao ler o arquivo Excel: {e}")
-                    
-        with col_up2:
-            st.markdown("##### 👥 Planilha de Colaboradores")
-            arquivo_emp = st.file_uploader("Arraste a planilha de COLABORADORES (.xlsx)", type=["xlsx"], key="up_emp")
-            if arquivo_emp:
-                try:
-                    df_emp_up = pd.read_excel(arquivo_emp)
-                    df_emp_up.columns = [normalizar_nome_coluna(c) for c in df_emp_up.columns]
-                    
-                    if 'matricula' not in df_emp_up.columns:
-                        st.error("A coluna obrigatória 'matricula' não foi encontrada.")
-                    else:
-                        total_lido = len(df_emp_up)
-                        df_emp_up = df_emp_up[df_emp_up['matricula'].apply(matricula_valida)].copy()
-                        df_emp_up['matricula'] = df_emp_up['matricula'].apply(limpar_texto_matricula)
-                        df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
-                        ignorados = total_lido - len(df_emp_up)
-                        
-                        st.caption(f"**{len(df_emp_up)}** colaboradores válidos prontos ({ignorados} linhas sem matrícula ignoradas).")
-                        st.dataframe(df_emp_up.head(3), use_container_width=True)
-                        
-                        if st.button("🚀 Subir Base de Colaboradores", type="primary"):
-                            with st.spinner("Atualizando colaboradores no Supabase..."):
-                                expurgar_linhas_nulas_nuvem()
-                                if salvar_dados_massa('empregados', df_emp_up, COLUNAS_EMPREGADOS):
-                                    registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
-                                    st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
-                                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro ao ler arquivo: {e}")
-
-    # --- ABA 6: EXCLUSÃO POR SELEÇÃO DE LINHAS (MASTER) ---
-    if st.session_state.perfil == 'Master':
-        with abas[6]:
-            st.subheader("❌ Exclusão de Registos por Seleção (Acesso Restrito Master)")
-            tipo_exclusao = st.radio("Selecione a Tabela para Exclusão:", ["📦 Ativos (Equipamentos)", "👥 Colaboradores (Empregados)"], horizontal=True)
-            
-            if tipo_exclusao.startswith("📦"):
-                if not df_ativos.empty:
-                    busca_del = st.text_input("🔍 Filtrar ativos antes de marcar (Patrimônio, Série, Equipamento ou Cautela):")
-                    cols_del_at = [c for c in COLUNAS_ATIVOS if c in df_ativos.columns]
-                    df_del_view = df_ativos[cols_del_at].copy()
-                    if busca_del.strip():
-                        t_del = busca_del.strip().lower()
-                        mask_del = df_del_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_del, na=False)).any(axis=1)
-                        df_del_view = df_del_view[mask_del]
-                        
-                    df_del_view.insert(0, "Excluir", False)
-                    
-                    df_editado = st.data_editor(
-                        df_del_view,
-                        hide_index=True,
-                        use_container_width=True,
-                        height=400,
-                        disabled=[c for c in df_del_view.columns if c != "Excluir"],
-                        column_config={"Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)},
-                        key="editor_del_ativos"
-                    )
-                    
-                    selecionados = df_editado[df_editado["Excluir"] == True]
-                    if not selecionados.empty:
-                        st.error(f"⚠️ Você selecionou **{len(selecionados)} ativo(s)** para exclusão definitiva: `{', '.join(selecionados['patrimonio'].astype(str).tolist())}`")
-                        if st.button(f"🗑️ Confirmar Exclusão de {len(selecionados)} Ativo(s)", type="primary"):
-                            try:
-                                expurgar_linhas_nulas_nuvem()
-                                lista_pats = [p for p in selecionados['patrimonio'].astype(str).tolist() if matricula_valida(p)]
-                                for p_del in lista_pats:
-                                    supabase.table('ativos_master').delete().eq('patrimonio', p_del).execute()
-                                registrar_log_auditoria("EXCLUSÃO EM LOTE (ATIVOS)", f"{len(selecionados)} itens", f"Patrimônios excluídos pelo Master: {', '.join(lista_pats)}")
-                                st.cache_data.clear()
-                                st.success(f"✅ {len(selecionados)} ativo(s) excluído(s) permanentemente!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao excluir ativos: {e}")
-                else:
-                    st.info("A tabela de ativos está vazia.")
+    # --- ABA: EDITAR EQUIPAMENTO CARREGADO (TOTAL: SUPERVISOR | LIMITADO: ARMAZENISTA) ---
+    if "✏️ Editar Equipamento Carregado" in mapa_abas:
+        with mapa_abas["✏️ Editar Equipamento Carregado"]:
+            is_supervisor = (perm_editar == "total")
+            st.subheader("✏️ Editar Informações de Equipamento Carregado")
+            if is_supervisor:
+                st.caption("Acesso Total (Supervisor): alterações críticas (Nº de Série, Baixa, Inativação ou ajuste de localização) exigem motivo obrigatório para Auditoria.")
             else:
-                if not df_empregados.empty:
-                    busca_emp_del = st.text_input("🔍 Filtrar colaborador por Nome ou Matrícula:")
-                    df_emp_view = df_empregados[COLUNAS_EMPREGADOS].copy()
-                    if busca_emp_del.strip():
-                        t_edel = busca_emp_del.strip().lower()
-                        mask_edel = df_emp_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_edel, na=False)).any(axis=1)
-                        df_emp_view = df_emp_view[mask_edel]
-                        
-                    df_emp_view.insert(0, "Excluir", False)
-                    
-                    df_emp_editado = st.data_editor(
-                        df_emp_view,
-                        hide_index=True,
-                        use_container_width=True,
-                        height=400,
-                        disabled=[c for c in df_emp_view.columns if c != "Excluir"],
-                        column_config={"Excluir": st.column_config.CheckboxColumn("🗑️ Excluir?", default=False)},
-                        key="editor_del_emp"
-                    )
-                    
-                    emp_selecionados = df_emp_editado[df_emp_editado["Excluir"] == True]
-                    if not emp_selecionados.empty:
-                        st.error(f"⚠️ Você selecionou **{len(emp_selecionados)} colaborador(es)** para exclusão: `{', '.join(emp_selecionados['nome'].astype(str).tolist())}`")
-                        if st.button(f"🗑️ Confirmar Exclusão de {len(emp_selecionados)} Colaborador(es)", type="primary"):
+                st.caption("Acesso Operacional (Armazenista): edição permitida para localização, condição física e acessórios. Alteração de Série, Valor ou Baixa Definitiva é restrita ao Supervisor.")
+
+            seletor_fn = getattr(operacao, 'render_seletor_excel_equipamentos', None)
+            df_edit_sel = seletor_fn(df_ativos, "edit_manual_eqp", multiplo=False, altura=190) if (seletor_fn and not df_ativos.empty) else pd.DataFrame()
+
+            if not df_edit_sel.empty:
+                reg_antigo = df_edit_sel.iloc[0].to_dict()
+                pat_alvo = str(reg_antigo['patrimonio']).strip()
+
+                st.info(f"🔧 **Editando Patrimônio:** `{pat_alvo}` — {reg_antigo.get('equipamento', '')} {reg_antigo.get('marca', '')} {reg_antigo.get('modelo', '')}")
+
+                with st.form(f"form_editar_ativo_{pat_alvo}"):
+                    e1, e2, e3, e4 = st.columns(4)
+                    with e1:
+                        st.text_input("Patrimônio (Chave Fixa)", value=pat_alvo, disabled=True)
+                        ed_eqp = st.text_input("Equipamento", value=str(reg_antigo.get('equipamento', '')), disabled=not is_supervisor)
+                        ed_marca = st.text_input("Marca", value=str(reg_antigo.get('marca', '')), disabled=not is_supervisor)
+                        ed_modelo = st.text_input("Modelo", value=str(reg_antigo.get('modelo', '')), disabled=not is_supervisor)
+                    with e2:
+                        ed_serie = st.text_input("Número de Série", value=str(reg_antigo.get('numero_serie', '')), disabled=not is_supervisor)
+                        ed_item = st.text_input("Item / Código D365", value=str(reg_antigo.get('item', '')), disabled=not is_supervisor)
+                        ed_valor = st.text_input("Valor (R$)", value=str(reg_antigo.get('valor', '')), disabled=not is_supervisor)
+                        ed_nf = st.text_input("NF Procisa", value=str(reg_antigo.get('nf_procisa', '')), disabled=not is_supervisor)
+                    with e3:
+                        ed_cautela = st.text_input("Cautela (Local/Responsável)", value=str(reg_antigo.get('cautela', '')))
+                        ed_end1 = st.text_input("Endereçamento 01 (LOCAL)", value=str(reg_antigo.get('enderecamento_01', '')))
+                        ed_end2 = st.text_input("Endereçamento 02 (Descri. Local)", value=str(reg_antigo.get('enderecamento_02', '')))
+                        op_st = ["Disponível", "Em uso", "Em manutenção", "Em trânsito", "Baixado", "Inativado"] if is_supervisor else ["Disponível", "Em uso", "Em manutenção", "Em trânsito"]
+                        st_at = str(reg_antigo.get('status_sistema', 'Disponível'))
+                        if st_at not in op_st:
+                            op_st.append(st_at)
+                        ed_status = st.selectbox("Status no Sistema", op_st, index=op_st.index(st_at))
+                    with e4:
+                        ed_proj = st.text_input("Projeto", value=str(reg_antigo.get('projeto', '')))
+                        ed_coord = st.text_input("Coordenação", value=str(reg_antigo.get('coordenacao', '')))
+                        op_cd = ["APTO", "APTO COM RESSALVA", "EM MANUTENÇÃO", "REPROVADO", "INSERVÍVEL"]
+                        cd_at = str(reg_antigo.get('condicoes_para_uso', 'APTO')).upper()
+                        ed_cond = st.selectbox("Condições para Uso", op_cd, index=op_cd.index(cd_at) if cd_at in op_cd else 0)
+                        ed_acess = st.text_input("Acessórios / Observações", value=str(reg_antigo.get('acessorios', '')))
+
+                    motivo_ed = st.text_input("Motivo da Edição Manual * (Obrigatório para alterações críticas e auditoria):")
+
+                    if st.form_submit_button("💾 Salvar Alterações e Auditar", type="primary"):
+                        novos_dados = {
+                            'item': ed_item.strip(),
+                            'valor': ed_valor.strip(),
+                            'equipamento': ed_eqp.strip(),
+                            'marca': ed_marca.strip(),
+                            'modelo': ed_modelo.strip(),
+                            'numero_serie': ed_serie.strip(),
+                            'cautela': ed_cautela.strip(),
+                            'enderecamento_01': ed_end1.strip().upper(),
+                            'enderecamento_02': ed_end2.strip().upper(),
+                            'projeto': ed_proj.strip(),
+                            'coordenacao': ed_coord.strip(),
+                            'nf_procisa': ed_nf.strip(),
+                            'condicoes_para_uso': ed_cond,
+                            'acessorios': ed_acess.strip(),
+                            'status_sistema': ed_status,
+                            'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                        }
+
+                        # Bloqueio de segurança para Armazenista tentar baixar/inativar
+                        if (not is_supervisor) and ed_status in ["Baixado", "Inativado"] and st_at not in ["Baixado", "Inativado"]:
+                            st.error("⛔ Apenas o Supervisor pode efetuar baixa definitiva ou inativação.")
+                            st.stop()
+
+                        mudancas = []
+                        alteracao_critica = False
+                        campos_criticos = {'numero_serie', 'enderecamento_01', 'enderecamento_02', 'cautela', 'status_sistema'}
+                        for k_campo, v_novo in novos_dados.items():
+                            if k_campo == 'atualizado_em':
+                                continue
+                            v_ant = str(reg_antigo.get(k_campo, '')).strip()
+                            if v_ant != str(v_novo).strip():
+                                mudancas.append(f"{k_campo}: '{v_ant}' -> '{v_novo}'")
+                                if k_campo in campos_criticos:
+                                    alteracao_critica = True
+
+                        if not mudancas:
+                            st.warning("Nenhuma alteração foi detectada nos campos.")
+                        elif alteracao_critica and not motivo_ed.strip():
+                            st.error("⛔ Controle Especial: É obrigatório informar o **Motivo da Edição Manual** ao alterar Série, Localização/Endereçamento, Cautela ou Status.")
+                        else:
                             try:
-                                expurgar_linhas_nulas_nuvem()
-                                lista_mats = [m for m in emp_selecionados['matricula'].astype(str).tolist() if matricula_valida(m)]
-                                for m_del in lista_mats:
-                                    supabase.table('empregados').delete().eq('matricula', m_del).execute()
-                                registrar_log_auditoria("EXCLUSÃO COLABORADORES", f"{len(emp_selecionados)} itens", f"Matrículas excluídas: {', '.join(lista_mats)}")
+                                supabase.table('ativos_master').update(novos_dados).eq('patrimonio', pat_alvo).execute()
+                                resumo_mudancas = " | ".join(mudancas)
+                                if motivo_ed.strip():
+                                    resumo_mudancas = f"[Motivo: {motivo_ed.strip()}] " + resumo_mudancas
+                                registrar_log_auditoria("EDIÇÃO MANUAL (EQUIPAMENTO)", pat_alvo, resumo_mudancas)
                                 st.cache_data.clear()
-                                st.success(f"✅ {len(emp_selecionados)} colaborador(es) removido(s) com sucesso!")
+                                st.success(f"✅ Equipamento `{pat_alvo}` atualizado e registrado na Auditoria ({len(mudancas)} campo(s) alterado(s))!")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao excluir colaboradores: {e}")
-                else:
-                    st.info("A tabela de colaboradores está vazia.")
+                                st.error(f"Erro ao atualizar equipamento: {e}")
+
+    # --- ABA: CADASTRAR NOVO EQUIPAMENTO (SUPERVISOR E ARMAZENISTA) ---
+    if "➕ Cadastrar Novo Equipamento" in mapa_abas:
+        with mapa_abas["➕ Cadastrar Novo Equipamento"]:
+            st.subheader("➕ Cadastrar Novo Equipamento")
+            with st.form("form_novo_ativo"):
+                colA, colB, colC, colD = st.columns(4)
+                with colA:
+                    cad_patrimonio = st.text_input("Patrimônio / Placa *")
+                    cad_equipamento = st.text_input("Equipamento *")
+                    cad_marca = st.text_input("Marca")
+                    cad_modelo = st.text_input("Modelo")
+                with colB:
+                    cad_serie = st.text_input("Número de Série")
+                    cad_item = st.text_input("Item / Código D365")
+                    cad_valor = st.text_input("Valor (R$)")
+                    cad_nf = st.text_input("NF Procisa")
+                with colC:
+                    cad_cautela = st.text_input("Cautela (Local/Responsável)", value="ALMOXARIFADO CENTRAL")
+                    cad_end1 = st.text_input("Endereçamento 01 (Prateleira)")
+                    cad_end2 = st.text_input("Endereçamento 02 (Caixa/Gaveta)")
+                    cad_status = st.selectbox("Status no Sistema", ["Disponível", "Em uso", "Em manutenção", "Em trânsito"])
+                with colD:
+                    cad_projeto = st.text_input("Projeto", value="ESTOQUE ALMOXARIFADO")
+                    cad_coord = st.text_input("Coordenação", value="LOGÍSTICA / ALMOXARIFADO")
+                    cad_condicao = st.selectbox("Condições para Uso", ["APTO", "APTO COM RESSALVA", "EM MANUTENÇÃO", "REPROVADO"])
+                    cad_acessorios = st.text_input("Acessórios / Observações")
+
+                if st.form_submit_button("💾 Salvar Equipamento na Nuvem", type="primary"):
+                    if cad_patrimonio.strip():
+                        pat_limpo = cad_patrimonio.strip()
+                        qtd_antes = len(df_ativos)
+                        ja_existia = (not df_ativos.empty) and (pat_limpo in df_ativos['patrimonio'].astype(str).values)
+
+                        if ja_existia and perfil_atual != "Supervisor":
+                            st.error("⛔ Este patrimônio já existe. Use a aba 'Editar Equipamento Carregado' ou solicite ao Supervisor.")
+                        else:
+                            dados_novo = {
+                                'item': cad_item.strip(),
+                                'valor': cad_valor.strip(),
+                                'equipamento': cad_equipamento.strip(),
+                                'marca': cad_marca.strip(),
+                                'modelo': cad_modelo.strip(),
+                                'numero_serie': cad_serie.strip(),
+                                'patrimonio': pat_limpo,
+                                'cautela': cad_cautela.strip(),
+                                'enderecamento_01': cad_end1.strip().upper(),
+                                'enderecamento_02': cad_end2.strip().upper(),
+                                'projeto': cad_projeto.strip(),
+                                'coordenacao': cad_coord.strip(),
+                                'nf_procisa': cad_nf.strip(),
+                                'atualizado_em': datetime.now().strftime('%Y-%m-%d'),
+                                'condicoes_para_uso': cad_condicao,
+                                'acessorios': cad_acessorios.strip(),
+                                'status_sistema': cad_status
+                            }
+                            try:
+                                if ja_existia:
+                                    supabase.table('ativos_master').update(dados_novo).eq('patrimonio', pat_limpo).execute()
+                                    tipo_op = "ATUALIZAÇÃO MANUAL"
+                                    qtd_depois = qtd_antes
+                                else:
+                                    supabase.table('ativos_master').insert(dados_novo).execute()
+                                    tipo_op = "CADASTRO MANUAL"
+                                    qtd_depois = qtd_antes + 1
+
+                                st.cache_data.clear()
+                                registrar_log_auditoria(tipo_op, pat_limpo, f"Ativo {pat_limpo} ({cad_marca} {cad_modelo}) salvo via formulário.")
+                                st.session_state.resumo_ultima_operacao = {
+                                    'titulo': f"Cadastro/Atualização Concluída ({pat_limpo})",
+                                    'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                                    'qtd_antes': qtd_antes,
+                                    'novos': 0 if ja_existia else 1,
+                                    'atualizados': 1 if ja_existia else 0,
+                                    'qtd_depois': qtd_depois
+                                }
+                                st.rerun()
+                            except Exception as err:
+                                st.error(f"Erro ao salvar: {err}")
+                    else:
+                        st.error("O campo 'Patrimônio' é obrigatório.")
+
+    # --- ABA: HISTÓRICO DE MOVIMENTAÇÕES ---
+    if "📜 Histórico de Movimentações" in mapa_abas:
+        with mapa_abas["📜 Histórico de Movimentações"]:
+            c_hm1, c_hm2 = st.columns([4.3, 0.7])
+            with c_hm1:
+                busca_hm = st.text_input("🔍 Filtrar Histórico de Movimentações:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Mov, Patrimônio, Origem, Destino ou Solicitante...")
+            with c_hm2:
+                with st.popover("👁️ Colunas", use_container_width=True):
+                    st.multiselect(
+                        "Colunas (Movimentações):",
+                        options=COLUNAS_MOV,
+                        default=[c for c in st.session_state.saved_cols_mov if c in COLUNAS_MOV],
+                        key="ms_mov_key",
+                        on_change=update_cols_mov,
+                        label_visibility="collapsed"
+                    )
+            cols_m_exibir = [c for c in (st.session_state.saved_cols_mov if st.session_state.saved_cols_mov else COLUNAS_MOV) if c in df_mov.columns] if not df_mov.empty else COLUNAS_MOV
+            df_m_show = df_mov.copy()
+            if not df_m_show.empty and busca_hm.strip():
+                tm = busca_hm.strip().lower()
+                df_m_show = df_m_show[df_m_show.astype(str).apply(lambda x: x.str.lower().str.contains(tm, na=False)).any(axis=1)]
+            st.dataframe(df_m_show[cols_m_exibir] if not df_m_show.empty else pd.DataFrame(columns=cols_m_exibir), use_container_width=True, hide_index=True, height=440)
+
+    # --- ABA: TERMOS EMITIDOS ---
+    if "📄 Termos Emitidos" in mapa_abas:
+        with mapa_abas["📄 Termos Emitidos"]:
+            c_ht1, c_ht2 = st.columns([4.3, 0.7])
+            with c_ht1:
+                busca_ht = st.text_input("🔍 Filtrar Termos Emitidos:", label_visibility="collapsed", placeholder="🔍 Buscar por ID Termo, Patrimônio, Responsável ou Matrícula...")
+            with c_ht2:
+                with st.popover("👁️ Colunas", use_container_width=True):
+                    st.multiselect(
+                        "Colunas (Termos):",
+                        options=COLUNAS_TERMOS,
+                        default=[c for c in st.session_state.saved_cols_trm if c in COLUNAS_TERMOS],
+                        key="ms_trm_key",
+                        on_change=update_cols_trm,
+                        label_visibility="collapsed"
+                    )
+            cols_t_exibir = [c for c in (st.session_state.saved_cols_trm if st.session_state.saved_cols_trm else COLUNAS_TERMOS) if c in df_termos.columns] if not df_termos.empty else COLUNAS_TERMOS
+            df_t_show = df_termos.copy()
+            if not df_t_show.empty and busca_ht.strip():
+                tt = busca_ht.strip().lower()
+                df_t_show = df_t_show[df_t_show.astype(str).apply(lambda x: x.str.lower().str.contains(tt, na=False)).any(axis=1)]
+            st.dataframe(df_t_show[cols_t_exibir] if not df_t_show.empty else pd.DataFrame(columns=cols_t_exibir), use_container_width=True, hide_index=True, height=440)
+
+    # --- ABA: IMPORTAR / EXPORTAR & BACKUP ---
+    if "📥 Importar / Exportar & Backup" in mapa_abas:
+        with mapa_abas["📥 Importar / Exportar & Backup"]:
+            st.subheader("📤 Exportar Relatórios do Sistema (.xlsx)")
+            stamp = datetime.now().strftime('%Y%m%d_%H%M')
+            c_exp1, c_exp2, c_exp3 = st.columns(3)
+
+            with c_exp1:
+                df_a_exp = df_ativos[[c for c in COLUNAS_ATIVOS if c in df_ativos.columns]] if not df_ativos.empty else pd.DataFrame(columns=COLUNAS_ATIVOS)
+                if st.download_button("📥 Baixar Relatório de Ativos (.xlsx)", data=converter_df_excel_simples(df_a_exp, "Ativos"), file_name=f"Ativos_Procisa_{stamp}.xlsx", use_container_width=True):
+                    registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Ativos", f"Download de {len(df_a_exp)} ativos.")
+                df_e_exp = df_empregados[COLUNAS_EMPREGADOS] if not df_empregados.empty else pd.DataFrame(columns=COLUNAS_EMPREGADOS)
+                if st.download_button("📥 Baixar Base de Colaboradores (.xlsx)", data=converter_df_excel_simples(df_e_exp, "Colaboradores"), file_name=f"Colaboradores_Procisa_{stamp}.xlsx", use_container_width=True):
+                    registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Colaboradores", f"Download de {len(df_e_exp)} colaboradores.")
+
+            with c_exp2:
+                df_m_exp = df_mov[COLUNAS_MOV] if not df_mov.empty else pd.DataFrame(columns=COLUNAS_MOV)
+                if st.download_button("📥 Baixar Histórico Movimentações (.xlsx)", data=converter_df_excel_simples(df_m_exp, "Movimentacoes"), file_name=f"Movimentacoes_Procisa_{stamp}.xlsx", use_container_width=True):
+                    registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Movimentações", f"Download de {len(df_m_exp)} movimentações.")
+                df_t_exp = df_termos[COLUNAS_TERMOS] if not df_termos.empty else pd.DataFrame(columns=COLUNAS_TERMOS)
+                if st.download_button("📥 Baixar Relatório de Termos (.xlsx)", data=converter_df_excel_simples(df_t_exp, "Termos"), file_name=f"Termos_Procisa_{stamp}.xlsx", use_container_width=True):
+                    registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Termos", f"Download de {len(df_t_exp)} termos.")
+
+            with c_exp3:
+                df_d_exp = df_diverg[COLUNAS_DIVERG] if not df_diverg.empty else pd.DataFrame(columns=COLUNAS_DIVERG)
+                if st.download_button("📥 Baixar Relatório Divergências (.xlsx)", data=converter_df_excel_simples(df_d_exp, "Divergencias"), file_name=f"Divergencias_Procisa_{stamp}.xlsx", use_container_width=True):
+                    registrar_log_auditoria("EXPORTAÇÃO EXCEL", "Divergências", f"Download de {len(df_d_exp)} divergências.")
+                backup_bytes = gerar_backup_completo_excel({
+                    "Ativos_Master": df_a_exp,
+                    "Colaboradores": df_e_exp,
+                    "Movimentacoes": df_m_exp,
+                    "Termos": df_t_exp,
+                    "Divergencias": df_d_exp
+                })
+                if st.download_button("📦 Baixar Backup Completo (Multi-Abas)", data=backup_bytes, file_name=f"Backup_Geral_Procisa_{stamp}.xlsx", type="primary", use_container_width=True):
+                    registrar_log_auditoria("BACKUP COMPLETO", "Sistema", "Exportação de todas as tabelas em arquivo multi-abas.")
+
+            st.divider()
+            st.subheader("📥 Carga Inicial / Atualização em Massa (Upload)")
+            col_up1, col_up2 = st.columns(2)
+            with col_up1:
+                st.markdown("##### 📦 Planilha de Equipamentos")
+                arquivo_up = st.file_uploader("Arraste o arquivo Excel de EQUIPAMENTOS (.xlsx)", type=["xlsx"])
+                if arquivo_up:
+                    try:
+                        df_up = pd.read_excel(arquivo_up)
+                        df_up.columns = [normalizar_nome_coluna(c) for c in df_up.columns]
+                        if 'status_sistema' not in df_up.columns:
+                            df_up['status_sistema'] = 'Disponível'
+                        if 'enderecamento_01' not in df_up.columns:
+                            df_up['enderecamento_01'] = ''
+                        if 'enderecamento_02' not in df_up.columns:
+                            df_up['enderecamento_02'] = ''
+
+                        if 'patrimonio' not in df_up.columns:
+                            st.error(f"A coluna 'patrimonio' não foi encontrada. Colunas lidas: {list(df_up.columns)}")
+                        else:
+                            df_up = df_up[df_up['patrimonio'].apply(matricula_valida)].copy()
+                            df_up['patrimonio'] = df_up['patrimonio'].apply(limpar_texto_matricula)
+                            df_up = df_up.drop_duplicates(subset=['patrimonio'], keep='last')
+
+                            atuais_set = set(df_ativos['patrimonio'].astype(str).str.strip()) if not df_ativos.empty else set()
+                            novos_set = set(df_up['patrimonio'])
+                            qtd_antes = len(atuais_set)
+                            qtd_novos = len(novos_set - atuais_set)
+                            qtd_atualizados = len(novos_set.intersection(atuais_set))
+                            qtd_depois = len(atuais_set.union(novos_set))
+
+                            st.caption(f"Antes: **{qtd_antes}** | Novos: **+{qtd_novos}** | Atualizados: **{qtd_atualizados}** | Projeção: **{qtd_depois}**")
+                            st.dataframe(df_up.head(3), use_container_width=True)
+
+                            if st.button("🚀 Confirmar e Subir Equipamentos", type="primary"):
+                                with st.spinner("Enviando equipamentos para o Supabase..."):
+                                    expurgar_linhas_nulas_nuvem()
+                                    if salvar_dados_massa('ativos_master', df_up, COLUNAS_ATIVOS):
+                                        registrar_log_auditoria("UPLOAD PLANILHA", arquivo_up.name, f"Arquivo '{arquivo_up.name}' enviado. Novos: +{qtd_novos} | Atualizados: {qtd_atualizados}.")
+                                        st.session_state.resumo_ultima_operacao = {
+                                            'titulo': f"Envio da planilha '{arquivo_up.name}' concluído!",
+                                            'hora': datetime.now().strftime('%d/%m/%Y %H:%M:%S'),
+                                            'qtd_antes': qtd_antes,
+                                            'novos': qtd_novos,
+                                            'atualizados': qtd_atualizados,
+                                            'qtd_depois': qtd_depois
+                                        }
+                                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao ler o arquivo Excel: {e}")
+
+            with col_up2:
+                st.markdown("##### 👥 Planilha de Colaboradores")
+                arquivo_emp = st.file_uploader("Arraste a planilha de COLABORADORES (.xlsx)", type=["xlsx"], key="up_emp")
+                if arquivo_emp:
+                    try:
+                        df_emp_up = pd.read_excel(arquivo_emp)
+                        df_emp_up.columns = [normalizar_nome_coluna(c) for c in df_emp_up.columns]
+                        if 'matricula' not in df_emp_up.columns:
+                            st.error("A coluna obrigatória 'matricula' não foi encontrada.")
+                        else:
+                            total_lido = len(df_emp_up)
+                            df_emp_up = df_emp_up[df_emp_up['matricula'].apply(matricula_valida)].copy()
+                            df_emp_up['matricula'] = df_emp_up['matricula'].apply(limpar_texto_matricula)
+                            df_emp_up = df_emp_up.drop_duplicates(subset=['matricula'], keep='last')
+                            ignorados = total_lido - len(df_emp_up)
+
+                            st.caption(f"**{len(df_emp_up)}** colaboradores válidos prontos ({ignorados} linhas sem matrícula ignoradas).")
+                            st.dataframe(df_emp_up.head(3), use_container_width=True)
+
+                            if st.button("🚀 Subir Base de Colaboradores", type="primary"):
+                                with st.spinner("Atualizando colaboradores no Supabase..."):
+                                    expurgar_linhas_nulas_nuvem()
+                                    if salvar_dados_massa('empregados', df_emp_up, COLUNAS_EMPREGADOS):
+                                        registrar_log_auditoria("UPLOAD COLABORADORES", arquivo_emp.name, f"Base de {len(df_emp_up)} colaboradores atualizada.")
+                                        st.success("✅ Base de colaboradores salva com sucesso na nuvem!")
+                                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao ler arquivo: {e}")
+
+    # --- ABA: INATIVAÇÃO AUDITADA (NO LUGAR DE EXCLUSÃO DEFINITIVA — APENAS SUPERVISOR) ---
+    if "🚫 Inativar Registos (Supervisor)" in mapa_abas:
+        with mapa_abas["🚫 Inativar Registos (Supervisor)"]:
+            st.subheader("🚫 Cancelamento / Inativação de Registos (Preservação de Auditoria)")
+            st.info("Para preservar rastreabilidade e auditoria, os equipamentos **não são apagados do banco**. Eles recebem o status **`Inativado`** com registro obrigatório de motivo, usuário, data e hora.")
+
+            if not df_ativos.empty:
+                df_ativos_inativar = df_ativos[df_ativos['status_sistema'].astype(str).str.upper() != 'INATIVADO'].copy()
+                busca_inat = st.text_input("🔍 Filtrar ativos antes de marcar (Patrimônio, Série, Equipamento ou Cautela):")
+                cols_inat = [c for c in ['patrimonio', 'equipamento', 'marca', 'modelo', 'numero_serie', 'status_sistema', 'cautela'] if c in df_ativos_inativar.columns]
+                df_inat_view = df_ativos_inativar[cols_inat].copy()
+                if busca_inat.strip():
+                    t_i = busca_inat.strip().lower()
+                    df_inat_view = df_inat_view[df_inat_view.astype(str).apply(lambda x: x.str.lower().str.contains(t_i, na=False)).any(axis=1)]
+
+                df_inat_view.insert(0, "Inativar", False)
+                df_edit_inat = st.data_editor(
+                    df_inat_view,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=340,
+                    disabled=[c for c in df_inat_view.columns if c != "Inativar"],
+                    column_config={"Inativar": st.column_config.CheckboxColumn("🚫 Inativar?", default=False)},
+                    key="editor_inat_ativos"
+                )
+
+                sel_inat = df_edit_inat[df_edit_inat["Inativar"] == True]
+                if not sel_inat.empty:
+                    pats_inat = sel_inat['patrimonio'].astype(str).tolist()
+                    st.warning(f"⚠️ **{len(pats_inat)} equipamento(s)** selecionado(s) para inativação: `{', '.join(pats_inat)}`")
+                    motivo_inat = st.text_input("Motivo Obrigatório da Inativação / Cancelamento *:")
+                    if st.button(f"🚫 Confirmar Inativação de {len(pats_inat)} Equipamento(s)", type="primary"):
+                        if not motivo_inat.strip():
+                            st.error("⛔ É obrigatório preencher o motivo da inativação para registro na Auditoria.")
+                        else:
+                            try:
+                                hoje_s = datetime.now().strftime('%Y-%m-%d')
+                                for p_in in pats_inat:
+                                    supabase.table('ativos_master').update({
+                                        'status_sistema': 'Inativado',
+                                        'atualizado_em': hoje_s,
+                                        'acessorios': f"[INATIVADO em {hoje_s}: {motivo_inat.strip()}]"
+                                    }).eq('patrimonio', p_in).execute()
+                                registrar_log_auditoria(
+                                    "INATIVAÇÃO AUDITADA",
+                                    f"{len(pats_inat)} itens",
+                                    f"Motivo: {motivo_inat.strip()} | Patrimônios: {', '.join(pats_inat)}"
+                                )
+                                st.cache_data.clear()
+                                st.success(f"✅ {len(pats_inat)} equipamento(s) inativado(s) com rastreabilidade preservada!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao inativar: {e}")
+            else:
+                st.info("Base de ativos vazia.")
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# MÓDULO 6: GESTÃO DE USUÁRIOS (MASTER)
+# MÓDULO 6: GESTÃO DE USUÁRIOS (EXCLUSIVO SUPERVISOR)
 # ==========================================
 def render_modulo_usuarios(df_usuarios):
+    if not obter_permissao("gestao_usuarios"):
+        st.error("⛔ Acesso negado. A Gestão de Usuários e Permissões é exclusiva do Supervisor.")
+        st.stop()
+
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-    st.subheader("👥 Painel Admin - Gestão de Usuários")
-    
-    aba_listar, aba_novo, aba_editar = st.tabs(["Visão Geral", "Novo Usuário", "Editar / Resetar Senha"])
-    
+    st.subheader("👥 Painel Admin — Gestão de Usuários e Perfis de Acesso")
+
+    aba_listar, aba_novo, aba_editar = st.tabs(["Visão Geral", "Novo Usuário", "Editar / Bloquear Usuário"])
+
     with aba_listar:
         st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
-        
+
     with aba_novo:
         with st.form("form_novo_user"):
             col1, col2 = st.columns(2)
             with col1:
-                novo_login = st.text_input("Login de Acesso (Ex: j.silva)")
-                novo_nome = st.text_input("Nome Completo")
+                novo_login = st.text_input("Matrícula / Login de Acesso *")
+                novo_nome = st.text_input("Nome Completo *")
             with col2:
-                nova_senha = st.text_input("Senha Inicial", type="password")
-                opcoes_perfis = ["Operador Campo", "Almoxarifado", "Laboratório", "Master"]
-                novo_perfil = st.selectbox("Nível de Acesso (Perfil)", opcoes_perfis)
-            
+                nova_senha = st.text_input("Senha Inicial *", type="password")
+                novo_perfil = st.selectbox("Nível de Acesso (Perfil) *", PERFIS_OFICIAIS)
+
             if st.form_submit_button("Cadastrar Usuário", type="primary"):
                 if novo_login.strip() and nova_senha.strip() and novo_nome.strip():
                     login_limpo = novo_login.strip()
@@ -681,9 +691,9 @@ def render_modulo_usuarios(df_usuarios):
                         st.error("Este login já existe! Escolha outro.")
                     else:
                         novo_registo = {
-                            'usuario': login_limpo, 
-                            'senha': str(nova_senha).strip(), 
-                            'perfil': novo_perfil, 
+                            'usuario': login_limpo,
+                            'senha': str(nova_senha).strip(),
+                            'perfil': novo_perfil,
                             'nome': novo_nome.strip()
                         }
                         try:
@@ -696,73 +706,83 @@ def render_modulo_usuarios(df_usuarios):
                             st.error(f"Erro ao criar usuário: {e}")
                 else:
                     st.error("Preencha todos os campos obrigatórios.")
-                    
+
     with aba_editar:
         if not df_usuarios.empty:
             usuario_editar = st.selectbox("Selecione o Usuário para alterar:", df_usuarios['usuario'].tolist())
             if usuario_editar:
                 user_match = df_usuarios[df_usuarios['usuario'] == usuario_editar].iloc[0].to_dict()
-                
                 col_a, col_b = st.columns(2)
                 with col_a:
                     senha_reset = st.text_input("Nova Senha", value=str(user_match.get('senha', '')))
                 with col_b:
-                    lista_perfis = ["Operador Campo", "Almoxarifado", "Laboratório", "Master"]
-                    perfil_atual = user_match.get('perfil', 'Operador Campo')
-                    idx_p = lista_perfis.index(perfil_atual) if perfil_atual in lista_perfis else 0
-                    perfil_edit = st.selectbox("Mudar Perfil", lista_perfis, index=idx_p)
-                    
+                    opcoes_p_ed = PERFIS_OFICIAIS + ["Bloqueado"]
+                    perfil_atual = normalizar_perfil(user_match.get('perfil', 'Operação Procisa')) if str(user_match.get('perfil', '')) != "Bloqueado" else "Bloqueado"
+                    idx_p = opcoes_p_ed.index(perfil_atual) if perfil_atual in opcoes_p_ed else 0
+                    perfil_edit = st.selectbox("Mudar Perfil / Status", opcoes_p_ed, index=idx_p)
+
+                motivo_u = st.text_input("Motivo da Alteração / Bloqueio (Para Auditoria):")
+
                 col_bt1, col_bt2 = st.columns(2)
                 with col_bt1:
-                    if st.button("💾 Salvar Alterações", use_container_width=True):
+                    if st.button("💾 Salvar Alterações", use_container_width=True, type="primary"):
                         try:
-                            dados_update_user = {'senha': str(senha_reset).strip(), 'perfil': perfil_edit}
-                            supabase.table('usuarios').update(dados_update_user).eq('usuario', usuario_editar).execute()
+                            supabase.table('usuarios').update({
+                                'senha': str(senha_reset).strip(),
+                                'perfil': perfil_edit
+                            }).eq('usuario', usuario_editar).execute()
                             st.cache_data.clear()
-                            registrar_log_auditoria("EDIÇÃO USUÁRIO", usuario_editar, f"Perfil/Senha atualizados (Perfil atual: {perfil_edit}).")
+                            registrar_log_auditoria("EDIÇÃO USUÁRIO", usuario_editar, f"Perfil alterado para '{perfil_edit}'. Motivo: {motivo_u.strip()}")
                             st.success(f"✅ Dados de {usuario_editar} atualizados!")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao atualizar usuário: {e}")
                 with col_bt2:
-                    if st.button("❌ Excluir Usuário", type="primary", use_container_width=True):
-                        if usuario_editar != 'master':
+                    if st.button("🔒 Bloquear Acesso do Usuário", use_container_width=True):
+                        if usuario_editar in [st.session_state.get('usuario'), 'master', '150071']:
+                            st.warning("Não é possível bloquear o usuário Supervisor principal ou o próprio acesso ativo.")
+                        elif not motivo_u.strip():
+                            st.error("⛔ Informe o motivo do bloqueio para auditoria.")
+                        else:
                             try:
-                                supabase.table('usuarios').delete().eq('usuario', usuario_editar).execute()
+                                supabase.table('usuarios').update({
+                                    'perfil': 'Bloqueado',
+                                    'senha': f"BLOQ-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                                }).eq('usuario', usuario_editar).execute()
                                 st.cache_data.clear()
-                                registrar_log_auditoria("EXCLUSÃO USUÁRIO", usuario_editar, f"Usuário {usuario_editar} removido do sistema.")
-                                st.success("✅ Usuário removido da nuvem!")
+                                registrar_log_auditoria("BLOQUEIO USUÁRIO", usuario_editar, f"Acesso bloqueado. Motivo: {motivo_u.strip()}")
+                                st.success(f"✅ Acesso de {usuario_editar} bloqueado com histórico preservado!")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Erro ao excluir usuário: {e}")
-                        else:
-                            st.warning("Não é possível excluir o usuário Master principal.")
+                                st.error(f"Erro ao bloquear usuário: {e}")
 
     exibir_marca_desenvolvedor()
 
 # ==========================================
-# MÓDULO 7: AUDITORIA GERAL (EXCLUSIVO GESTOR)
+# MÓDULO 7: AUDITORIA GERAL (TOTAL / CONSULTA / PRÓPRIAS)
 # ==========================================
 def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados):
-    if st.session_state.perfil != 'Master':
-        st.error("⛔ Acesso negado. Este módulo é exclusivo para o perfil Gestor (Master).")
-        st.stop()
-        
+    nivel_aud = obter_permissao("auditoria")
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-    st.subheader("🛡️ Central de Auditoria e Rastreabilidade (Gestor)")
-    
-    info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados], limite_mb=500.0)
-    st.markdown(
-        f"<div style='background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px 14px; font-size: 0.80rem; color: #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>"
-        f"<span>☁️ <b>Armazenamento Supabase (500 MB):</b> Utilizado: <b>{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.1f}%)</b> &nbsp;|&nbsp; Livre: <b>{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.1f}%)</b> &nbsp;|&nbsp; Tabelas: {info_cap['dados_puros_kb']:.1f} KB ({info_cap['total_linhas']} reg.)</span>"
-        f"<span style='color: #888; font-size: 0.74rem;'>Desenvolvido por Marcos Paulo Da Veiga Carvalho</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
+
+    if nivel_aud == "total":
+        st.subheader("🛡️ Central de Auditoria e Rastreabilidade (Supervisor — Acesso Total)")
+        info_cap = calcular_uso_supabase([df_ativos, df_mov, df_termos, df_diverg, df_logs, df_usuarios, df_empregados], limite_mb=500.0)
+        st.markdown(
+            f"<div style='background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 6px 14px; font-size: 0.80rem; color: #555; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;'>"
+            f"<span>☁️ <b>Armazenamento Supabase (500 MB):</b> Utilizado: <b>{info_cap['usado_mb']:.2f} MB ({info_cap['pct_usado']:.1f}%)</b> &nbsp;|&nbsp; Livre: <b>{info_cap['livre_mb']:.2f} MB ({info_cap['pct_livre']:.1f}%)</b> &nbsp;|&nbsp; Tabelas: {info_cap['dados_puros_kb']:.1f} KB ({info_cap['total_linhas']} reg.)</span>"
+            f"<span style='color: #888; font-size: 0.74rem;'>Desenvolvido por Marcos Paulo Da Veiga Carvalho</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+    elif nivel_aud == "consulta":
+        st.subheader("🛡️ Histórico e Auditoria (Armazenista — Somente Consulta)")
+    else:
+        st.subheader("📋 Minhas Movimentações e Solicitações (Operação Procisa)")
 
     lista_eventos = []
-    
-    if not df_logs.empty:
+
+    if nivel_aud in ["total", "consulta"] and not df_logs.empty:
         for _, r in df_logs.iterrows():
             lista_eventos.append({
                 'Data / Hora': str(r.get('data_registro', '')),
@@ -771,7 +791,7 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
                 'Usuário / Responsável': str(r.get('analista_responsavel', '')),
                 'Detalhes da Operação': str(r.get('observacoes', ''))
             })
-            
+
     if not df_mov.empty:
         for _, r in df_mov.iterrows():
             lista_eventos.append({
@@ -781,8 +801,8 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
                 'Usuário / Responsável': str(r.get('solicitante', '')),
                 'Detalhes da Operação': f"Origem: {r.get('origem', '')} -> Destino: {r.get('destino', '')} | Status: {r.get('status_mov', '')}"
             })
-            
-    if not df_termos.empty:
+
+    if nivel_aud in ["total", "consulta"] and not df_termos.empty:
         for _, r in df_termos.iterrows():
             lista_eventos.append({
                 'Data / Hora': str(r.get('data_emissao', '')),
@@ -791,11 +811,22 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
                 'Usuário / Responsável': str(r.get('responsavel', '')),
                 'Detalhes da Operação': f"Termo {r.get('id_termo', '')} | Unidade: {r.get('unidade', '')} | Status: {r.get('status_termo', '')} | Baixa: {r.get('data_baixa', '-')}"
             })
-            
+
     df_auditoria = pd.DataFrame(lista_eventos)
     if not df_auditoria.empty:
+        # Operação Procisa visualiza apenas as próprias movimentações/solicitações
+        if nivel_aud == "proprias":
+            nome_u = str(st.session_state.get('nome_real', '')).strip().upper()
+            login_u = str(st.session_state.get('usuario', '')).strip().upper()
+            mask_proprio = (
+                df_auditoria['Usuário / Responsável'].str.upper().str.contains(nome_u, regex=False, na=False) |
+                df_auditoria['Usuário / Responsável'].str.upper().str.contains(login_u, regex=False, na=False) |
+                df_auditoria['Detalhes da Operação'].str.upper().str.contains(nome_u, regex=False, na=False)
+            )
+            df_auditoria = df_auditoria[mask_proprio].copy()
+
         df_auditoria = df_auditoria.sort_values(by='Data / Hora', ascending=False).reset_index(drop=True)
-        
+
     if not df_auditoria.empty:
         col_f1, col_f2 = st.columns(2)
         with col_f1:
@@ -803,7 +834,7 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
             filtro_tipo = st.selectbox("Filtrar por Tipo de Ação:", tipos_unicos)
         with col_f2:
             busca_texto = st.text_input("Buscar por Patrimônio, ID FER, Usuário ou Palavra-chave:")
-            
+
         df_filtrado = df_auditoria.copy()
         if filtro_tipo != "Todos":
             df_filtrado = df_filtrado[df_filtrado['Tipo de Evento'] == filtro_tipo]
@@ -815,20 +846,20 @@ def render_modulo_auditoria(df_ativos, df_mov, df_termos, df_diverg, df_logs, df
                 df_filtrado['Detalhes da Operação'].str.lower().str.contains(termo, na=False)
             )
             df_filtrado = df_filtrado[mask]
-            
+
         st.dataframe(df_filtrado, use_container_width=True, hide_index=True, height=440)
-        
-        out_aud = io.BytesIO()
-        with pd.ExcelWriter(out_aud, engine='openpyxl') as writer:
-            df_filtrado.to_excel(writer, index=False, sheet_name='Auditoria_Sistema')
-        
-        st.download_button(
-            label="📥 Exportar Relatório de Auditoria (.xlsx)",
-            data=out_aud.getvalue(),
-            file_name=f"Relatorio_Auditoria_Procisa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+
+        if nivel_aud in ["total", "consulta"]:
+            out_aud = io.BytesIO()
+            with pd.ExcelWriter(out_aud, engine='openpyxl') as writer:
+                df_filtrado.to_excel(writer, index=False, sheet_name='Auditoria_Sistema')
+            st.download_button(
+                label="📥 Exportar Relatório de Auditoria (.xlsx)",
+                data=out_aud.getvalue(),
+                file_name=f"Relatorio_Auditoria_Procisa_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     else:
-        st.info("Nenhum evento de auditoria registrado até o momento.")
+        st.info("Nenhum evento encontrado para o seu nível de acesso.")
 
     exibir_marca_desenvolvedor()
