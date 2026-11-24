@@ -10,6 +10,8 @@ supabase = nuvem.supabase
 registrar_log_auditoria = nuvem.registrar_log_auditoria
 exibir_marca_desenvolvedor = nuvem.exibir_marca_desenvolvedor
 calcular_dias_sem_mov = getattr(nuvem, 'calcular_dias_sem_mov', lambda x: "0")
+normalizar_perfil = getattr(nuvem, 'normalizar_perfil', lambda p: p)
+obter_permissao = getattr(nuvem, 'obter_permissao', lambda acao: True)
 
 MOTIVOS_SEGREGACAO_DESCARTE = [
     "Avariado sem possibilidade de reparo",
@@ -22,7 +24,7 @@ MOTIVOS_SEGREGACAO_DESCARTE = [
     "Outro (exige justificativa)"
 ]
 
-STATUS_FLUXO_DESCARTE = [
+STATUS_FLUXO_DESCARTE_SUPERVISOR = [
     "Identificado para descarte",
     "Segregado",
     "Em avaliação",
@@ -34,20 +36,40 @@ STATUS_FLUXO_DESCARTE = [
     "Reaproveitamento aprovado -> Retornar ao estoque/operação"
 ]
 
-STATUS_ROUBO_FURTO = [
+STATUS_FLUXO_DESCARTE_ARMAZENISTA = [
+    "Identificado para descarte",
+    "Segregado",
+    "Em avaliação",
+    "Aguardando aprovação"
+]
+
+STATUS_ROUBO_FURTO_SUPERVISOR = [
     "Em análise",
     "B.O. realizado",
     "Baixa solicitada",
     "Baixado"
 ]
 
-STATUS_SEM_GIRO = [
+STATUS_ROUBO_FURTO_ARMAZENISTA = [
+    "Em análise",
+    "B.O. realizado",
+    "Baixa solicitada"
+]
+
+STATUS_SEM_GIRO_SUPERVISOR = [
     "Sem giro",
     "Em análise",
     "Reaproveitar / Transferir",
     "Descartar",
     "Aprovado para descarte",
     "Baixado"
+]
+
+STATUS_SEM_GIRO_ARMAZENISTA = [
+    "Sem giro",
+    "Em análise",
+    "Reaproveitar / Transferir",
+    "Descartar"
 ]
 
 def classificar_faixa_aging(dias):
@@ -65,12 +87,11 @@ def classificar_faixa_aging(dias):
         return "🔴 > 365 dias (Candidato Obsolescência/Descarte)"
 
 def _codificar_anexo_bo(arquivo_up):
-    """Converte o arquivo do B.O. (PDF/imagem) para string Base64 compacta para salvar na coluna anexo_bo."""
     if arquivo_up is None:
         return ""
     conteudo = arquivo_up.getvalue()
     if len(conteudo) > 4 * 1024 * 1024:
-        st.warning("⚠️ O arquivo excede 4 MB. Envie um PDF/imagem mais leve ou informe um link externo.")
+        st.warning("⚠️ O arquivo excede 4 MB. Envie um PDF/imagem mais leve ou informe um link externo (OneDrive).")
         return ""
     b64 = base64.b64encode(conteudo).decode("utf-8")
     nome_limpo = str(arquivo_up.name).replace("|", "_")
@@ -107,7 +128,6 @@ def _extrair_link_externo(val):
     return None
 
 def _gerar_diff_auditoria(reg_antigo, novos_dados, ignorar=None):
-    """Compara valores antigos e novos para gerar trilha detalhada na Auditoria Geral."""
     ignorar_set = set(ignorar or [])
     mudancas = []
     for k, v_novo in novos_dados.items():
@@ -125,9 +145,86 @@ def _gerar_diff_auditoria(reg_antigo, novos_dados, ignorar=None):
     return mudancas
 
 def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
+    perfil_atual = normalizar_perfil(st.session_state.get('perfil', ''))
+    is_supervisor = (perfil_atual == "Supervisor")
+    is_operacao = (perfil_atual == "Operação Procisa")
+
     st.markdown("<style>div.block-container{padding-top: 2.8rem; padding-bottom: 1rem;}</style>", unsafe_allow_html=True)
-    st.subheader("🚨 Governança de Ativos — Roubo/Furto, Sem Giro (Aging) e Descarte")
-    st.caption("Controle de ocorrências, ociosidade e descarte definitivo com bloqueio automático de movimentação e rastreabilidade integral.")
+
+    # ==========================================================
+    # MODO RESTRITO: OPERAÇÃO PROCISA (SOMENTE COMUNICAÇÃO DE ROUBO/FURTO E CONSULTA)
+    # ==========================================================
+    if is_operacao:
+        st.subheader("🚨 Comunicar Roubo / Furto (Operação Procisa)")
+        st.caption("Utilize este canal para comunicar imediatamente ocorrências de roubo ou furto. O Almoxarifado e o Supervisor serão notificados para conferência e tratativa.")
+
+        aba_com, aba_minhas = st.tabs(["➕ Comunicar Ocorrência", "📋 Minhas Comunicações"])
+        with aba_com:
+            ativos_eleg = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['ROUBADO/FURTADO', 'BAIXADO', 'INATIVADO'])].copy() if not df_ativos.empty else pd.DataFrame()
+            df_sel_op = operacao.render_seletor_excel_equipamentos(ativos_eleg, "roubo_op_comunicar", multiplo=False, altura=180)
+            if not df_sel_op.empty:
+                r_op = df_sel_op.iloc[0].to_dict()
+                pat_op = str(r_op['patrimonio']).strip()
+                with st.form("form_comunicar_roubo_op"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        tipo_op = st.selectbox("Tipo de Ocorrência *", ["Roubo", "Furto"])
+                        dt_op = st.date_input("Data da Ocorrência *", datetime.today())
+                        resp_op = st.text_input("Responsável na Ocorrência *", value=st.session_state.get('nome_real', ''))
+                    with c2:
+                        num_bo_op = st.text_input("Nº do B.O. (se já possuir)")
+                        link_bo_op = st.text_input("Link do B.O. no OneDrive (Opcional)")
+                        obs_op = st.text_area("Relato / Motivo Obrigatório *:")
+
+                    if st.form_submit_button("🚨 Enviar Comunicação ao Almoxarifado", type="primary"):
+                        if not obs_op.strip():
+                            st.error("⛔ O relato / motivo da ocorrência é obrigatório.")
+                        else:
+                            id_oc = f"RF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            supabase.table('eqp_roubo_furto').insert({
+                                'id_ocorrencia': id_oc,
+                                'equipamento': str(r_op.get('equipamento', '')),
+                                'fabricante_modelo': f"{r_op.get('marca', '')} {r_op.get('modelo', '')}".strip(),
+                                'numero_serie': str(r_op.get('numero_serie', '')),
+                                'patrimonio': pat_op,
+                                'base_localizacao': str(r_op.get('coordenacao', '')),
+                                'responsavel': resp_op.strip(),
+                                'data_ocorrencia': dt_op.strftime('%Y-%m-%d'),
+                                'tipo': tipo_op,
+                                'num_bo': num_bo_op.strip(),
+                                'data_bo': '',
+                                'anexo_bo': link_bo_op.strip(),
+                                'status': 'Em análise',
+                                'data_baixa': '',
+                                'observacao': f"[Comunicado por {st.session_state.get('nome_real', '')}] {obs_op.strip()}"
+                            }).execute()
+                            registrar_log_auditoria(f"COMUNICAÇÃO {tipo_op.upper()}", pat_op, f"ID {id_oc} | Comunicado pela Operação. Relato: {obs_op.strip()}")
+                            st.session_state["sel_excel_pats_roubo_op_comunicar"] = set()
+                            st.cache_data.clear()
+                            st.success(f"✅ Comunicação `{id_oc}` enviada ao Almoxarifado e Supervisor!")
+                            st.rerun()
+
+        with aba_minhas:
+            if not df_roubo.empty:
+                nome_u = str(st.session_state.get('nome_real', '')).strip().upper()
+                df_minhas_rf = df_roubo[
+                    df_roubo['responsavel'].astype(str).str.upper().str.contains(nome_u, regex=False, na=False) |
+                    df_roubo['observacao'].astype(str).str.upper().str.contains(nome_u, regex=False, na=False)
+                ]
+                st.dataframe(df_minhas_rf[['id_ocorrencia', 'patrimonio', 'equipamento', 'data_ocorrencia', 'tipo', 'num_bo', 'status', 'observacao']], use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhuma comunicação registrada.")
+        exibir_marca_desenvolvedor()
+        return
+
+    # ==========================================================
+    # VISÃO SUPERVISOR E ARMAZENISTA
+    # ==========================================================
+    st.subheader(f"🚨 Governança de Ativos — Roubo/Furto, Sem Giro e Descarte ({perfil_atual})")
+    if is_supervisor:
+        st.caption("Nível Supervisor: controle total, aprovação de baixas/descartes e auditoria completa.")
+    else:
+        st.caption("Nível Armazenista: preenchimento operacional, segregação e envio para aprovação. Baixas definitivas e aprovações finais são exclusivas do Supervisor.")
 
     aba_roubo, aba_aging, aba_descarte = st.tabs([
         f"🚨 Roubados / Furtados ({len(df_roubo)})",
@@ -139,9 +236,6 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
     # ABA 1: EQUIPAMENTOS ROUBADOS / FURTADOS
     # ==========================================================
     with aba_roubo:
-        st.markdown("##### 🚨 Controle de Equipamentos Roubados / Furtados")
-        st.caption("Ao registrar uma ocorrência, o equipamento é bloqueado automaticamente na base principal (`Status: Roubado/Furtado`) e deixa de contar como disponível.")
-
         sub_r1, sub_r2, sub_r3 = st.tabs([
             "📋 Histórico de Ocorrências",
             "➕ Registrar Nova Ocorrência",
@@ -165,11 +259,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                     hide_index=True,
                     height=340,
                     column_config={
-                        "link_direto": st.column_config.LinkColumn(
-                            "Link B.O.",
-                            help="Clique para abrir o link externo (OneDrive/SharePoint) em nova aba",
-                            display_text="🔗 Abrir Link"
-                        ),
+                        "link_direto": st.column_config.LinkColumn("Link B.O.", display_text="🔗 Abrir Link"),
                         "anexo_bo": st.column_config.TextColumn("Arquivo Anexado")
                     }
                 )
@@ -186,13 +276,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         if str(raw_anexo).startswith("B64|"):
                             nome_arq, mime_arq, bytes_arq = _extrair_anexo_download(raw_anexo)
                             if bytes_arq:
-                                st.download_button(
-                                    f"📥 Baixar Arquivo ({nome_arq})",
-                                    data=bytes_arq,
-                                    file_name=nome_arq,
-                                    mime=mime_arq,
-                                    type="primary"
-                                )
+                                st.download_button(f"📥 Baixar Arquivo ({nome_arq})", data=bytes_arq, file_name=nome_arq, mime=mime_arq, type="primary")
                         else:
                             url_bo = _extrair_link_externo(raw_anexo)
                             if url_bo:
@@ -209,13 +293,14 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                 st.info("Nenhuma ocorrência de roubo ou furto registrada.")
 
         with sub_r2:
-            ativos_elegiveis = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['ROUBADO/FURTADO', 'BAIXADO'])].copy() if not df_ativos.empty else pd.DataFrame()
-            st.markdown("###### 1️⃣ Selecione o equipamento na tabela (Estilo Excel):")
+            ativos_elegiveis = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['ROUBADO/FURTADO', 'BAIXADO', 'INATIVADO'])].copy() if not df_ativos.empty else pd.DataFrame()
             df_sel_r = operacao.render_seletor_excel_equipamentos(ativos_elegiveis, "roubo_eqp_sel", multiplo=False, altura=180)
 
             if not df_sel_r.empty:
                 r_at = df_sel_r.iloc[0].to_dict()
                 pat_r = str(r_at['patrimonio']).strip()
+                op_st_rf = STATUS_ROUBO_FURTO_SUPERVISOR if is_supervisor else STATUS_ROUBO_FURTO_ARMAZENISTA
+
                 with st.form("form_reg_roubo"):
                     c1, c2, c3 = st.columns(3)
                     with c1:
@@ -229,43 +314,46 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         arq_bo_up = st.file_uploader("📎 Anexar B.O. (PDF, JPG ou PNG - máx. 4 MB)", type=["pdf", "png", "jpg", "jpeg"], key="up_bo_novo")
                         link_bo = st.text_input("Ou Link Externo do B.O. (OneDrive / SharePoint)")
                     with c3:
-                        st_oc = st.selectbox("Status da Ocorrência *", STATUS_ROUBO_FURTO, index=0)
-                        obs_oc = st.text_area("Observações / Relato:")
+                        st_oc = st.selectbox("Status da Ocorrência *", op_st_rf, index=0)
+                        obs_oc = st.text_area("Relato / Motivo Obrigatório *:")
 
                     if st.form_submit_button("🚨 Registrar Ocorrência e Bloquear Equipamento", type="primary"):
-                        id_oc = f"RF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                        anexo_final = _codificar_anexo_bo(arq_bo_up) if arq_bo_up is not None else link_bo.strip()
-                        novo_rf = {
-                            'id_ocorrencia': id_oc,
-                            'equipamento': str(r_at.get('equipamento', '')),
-                            'fabricante_modelo': f"{r_at.get('marca', '')} {r_at.get('modelo', '')}".strip(),
-                            'numero_serie': str(r_at.get('numero_serie', '')),
-                            'patrimonio': pat_r,
-                            'base_localizacao': base_oc.strip(),
-                            'responsavel': resp_oc.strip(),
-                            'data_ocorrencia': dt_oc.strftime('%Y-%m-%d'),
-                            'tipo': tipo_oc,
-                            'num_bo': num_bo.strip(),
-                            'data_bo': dt_bo.strip(),
-                            'anexo_bo': anexo_final,
-                            'status': st_oc,
-                            'data_baixa': datetime.now().strftime('%Y-%m-%d') if st_oc == "Baixado" else "",
-                            'observacao': obs_oc.strip()
-                        }
-                        try:
-                            supabase.table('eqp_roubo_furto').insert(novo_rf).execute()
-                            novo_st_master = "Baixado" if st_oc == "Baixado" else "Roubado/Furtado"
-                            supabase.table('ativos_master').update({
-                                'status_sistema': novo_st_master,
-                                'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-                            }).eq('patrimonio', pat_r).execute()
-                            registrar_log_auditoria(f"OCORRÊNCIA {tipo_oc.upper()}", pat_r, f"ID {id_oc} | Resp: {resp_oc} | B.O.: {num_bo} | Status: {st_oc}")
-                            st.session_state["sel_excel_pats_roubo_eqp_sel"] = set()
-                            st.cache_data.clear()
-                            st.success(f"✅ Ocorrência `{id_oc}` registrada! Equipamento `{pat_r}` bloqueado como `{novo_st_master}`.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Erro ao salvar ocorrência: {e}")
+                        if not obs_oc.strip():
+                            st.error("⛔ Controle Especial: É obrigatório preencher o Relato / Motivo da ocorrência.")
+                        else:
+                            id_oc = f"RF-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                            anexo_final = _codificar_anexo_bo(arq_bo_up) if arq_bo_up is not None else link_bo.strip()
+                            novo_rf = {
+                                'id_ocorrencia': id_oc,
+                                'equipamento': str(r_at.get('equipamento', '')),
+                                'fabricante_modelo': f"{r_at.get('marca', '')} {r_at.get('modelo', '')}".strip(),
+                                'numero_serie': str(r_at.get('numero_serie', '')),
+                                'patrimonio': pat_r,
+                                'base_localizacao': base_oc.strip(),
+                                'responsavel': resp_oc.strip(),
+                                'data_ocorrencia': dt_oc.strftime('%Y-%m-%d'),
+                                'tipo': tipo_oc,
+                                'num_bo': num_bo.strip(),
+                                'data_bo': dt_bo.strip(),
+                                'anexo_bo': anexo_final,
+                                'status': st_oc,
+                                'data_baixa': datetime.now().strftime('%Y-%m-%d') if (st_oc == "Baixado" and is_supervisor) else "",
+                                'observacao': obs_oc.strip()
+                            }
+                            try:
+                                supabase.table('eqp_roubo_furto').insert(novo_rf).execute()
+                                novo_st_master = "Baixado" if (st_oc == "Baixado" and is_supervisor) else "Roubado/Furtado"
+                                supabase.table('ativos_master').update({
+                                    'status_sistema': novo_st_master,
+                                    'atualizado_em': datetime.now().strftime('%Y-%m-%d')
+                                }).eq('patrimonio', pat_r).execute()
+                                registrar_log_auditoria(f"OCORRÊNCIA {tipo_oc.upper()}", pat_r, f"ID {id_oc} | Resp: {resp_oc} | B.O.: {num_bo} | Status: {st_oc} | Motivo: {obs_oc.strip()}")
+                                st.session_state["sel_excel_pats_roubo_eqp_sel"] = set()
+                                st.cache_data.clear()
+                                st.success(f"✅ Ocorrência `{id_oc}` registrada! Equipamento `{pat_r}` bloqueado como `{novo_st_master}`.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Erro ao salvar ocorrência: {e}")
 
         with sub_r3:
             if not df_roubo.empty:
@@ -274,9 +362,10 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                 id_rf_ed = sel_rf.split(" | ")[0]
                 reg_rf = df_roubo[df_roubo['id_ocorrencia'] == id_rf_ed].iloc[0].to_dict()
 
-                anexo_atual_resumo = _resumir_anexo_tabela(reg_rf.get('anexo_bo', ''))
-                if anexo_atual_resumo:
-                    st.info(f"Anexo / Link atual: **{anexo_atual_resumo}**")
+                op_st_rf_ed = STATUS_ROUBO_FURTO_SUPERVISOR if is_supervisor else STATUS_ROUBO_FURTO_ARMAZENISTA
+                st_atual_rf = str(reg_rf.get('status', 'Em análise'))
+                if st_atual_rf not in op_st_rf_ed:
+                    op_st_rf_ed = op_st_rf_ed + [st_atual_rf]
 
                 with st.form(f"form_ed_roubo_{id_rf_ed}"):
                     e1, e2, e3 = st.columns(3)
@@ -290,15 +379,18 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                     with e2:
                         ed_bo = st.text_input("Nº do B.O.", value=str(reg_rf.get('num_bo', '')))
                         ed_dt_bo = st.text_input("Data do B.O.", value=str(reg_rf.get('data_bo', '')))
-                        ed_arq_bo = st.file_uploader("📎 Anexar / Substituir B.O. (PDF, JPG ou PNG)", type=["pdf", "png", "jpg", "jpeg"], key=f"up_bo_edit_{id_rf_ed}")
-                        ed_link_bo = st.text_input("Ou Link Externo B.O. (OneDrive / SharePoint)", value="" if str(reg_rf.get('anexo_bo', '')).startswith("B64|") else str(reg_rf.get('anexo_bo', '')))
+                        ed_arq_bo = st.file_uploader("📎 Anexar / Substituir B.O.", type=["pdf", "png", "jpg", "jpeg"], key=f"up_bo_edit_{id_rf_ed}")
+                        ed_link_bo = st.text_input("Ou Link Externo B.O. (OneDrive)", value="" if str(reg_rf.get('anexo_bo', '')).startswith("B64|") else str(reg_rf.get('anexo_bo', '')))
                     with e3:
-                        st_atual_rf = str(reg_rf.get('status', 'Em análise'))
-                        ed_st_rf = st.selectbox("Status:", STATUS_ROUBO_FURTO, index=STATUS_ROUBO_FURTO.index(st_atual_rf) if st_atual_rf in STATUS_ROUBO_FURTO else 0)
-                        ed_dt_bx = st.text_input("Data da Baixa (AAAA-MM-DD):", value=str(reg_rf.get('data_baixa', '')))
-                        ed_obs_rf = st.text_area("Observação:", value=str(reg_rf.get('observacao', '')))
+                        ed_st_rf = st.selectbox("Status:", op_st_rf_ed, index=op_st_rf_ed.index(st_atual_rf))
+                        ed_dt_bx = st.text_input("Data da Baixa (AAAA-MM-DD):", value=str(reg_rf.get('data_baixa', '')), disabled=not is_supervisor)
+                        ed_obs_rf = st.text_area("Observação / Motivo:", value=str(reg_rf.get('observacao', '')))
 
                     if st.form_submit_button("💾 Salvar Edição da Ocorrência", type="primary"):
+                        if (not is_supervisor) and ed_st_rf == "Baixado" and st_atual_rf != "Baixado":
+                            st.error("⛔ Apenas o Supervisor pode concluir a baixa definitiva de equipamento roubado/furtado.")
+                            st.stop()
+
                         dt_bx_final = ed_dt_bx.strip()
                         if ed_st_rf == "Baixado" and not dt_bx_final:
                             dt_bx_final = datetime.now().strftime('%Y-%m-%d')
@@ -327,19 +419,13 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         if not mudancas:
                             st.warning("Nenhuma alteração foi feita nos campos.")
                         else:
-                            try:
-                                supabase.table('eqp_roubo_furto').update(novos_rf).eq('id_ocorrencia', id_rf_ed).execute()
-                                novo_st_m = 'Baixado' if ed_st_rf == "Baixado" else 'Roubado/Furtado'
-                                supabase.table('ativos_master').update({
-                                    'status_sistema': novo_st_m,
-                                    'atualizado_em': datetime.now().strftime('%Y-%m-%d')
-                                }).eq('patrimonio', reg_rf['patrimonio']).execute()
-                                registrar_log_auditoria("EDIÇÃO ROUBO/FURTO", reg_rf['patrimonio'], f"ID {id_rf_ed} | " + " | ".join(mudancas))
-                                st.cache_data.clear()
-                                st.success(f"✅ Ocorrência `{id_rf_ed}` atualizada ({len(mudancas)} campo(s) alterado(s))!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar ocorrência: {e}")
+                            supabase.table('eqp_roubo_furto').update(novos_rf).eq('id_ocorrencia', id_rf_ed).execute()
+                            novo_st_m = 'Baixado' if ed_st_rf == "Baixado" else 'Roubado/Furtado'
+                            supabase.table('ativos_master').update({'status_sistema': novo_st_m, 'atualizado_em': datetime.now().strftime('%Y-%m-%d')}).eq('patrimonio', reg_rf['patrimonio']).execute()
+                            registrar_log_auditoria("EDIÇÃO ROUBO/FURTO", reg_rf['patrimonio'], f"ID {id_rf_ed} | " + " | ".join(mudancas))
+                            st.cache_data.clear()
+                            st.success(f"✅ Ocorrência `{id_rf_ed}` atualizada!")
+                            st.rerun()
             else:
                 st.info("Nenhuma ocorrência para editar.")
 
@@ -347,11 +433,8 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
     # ABA 2: EQUIPAMENTOS SEM GIRO / AGING
     # ==========================================================
     with aba_aging:
-        st.markdown("##### ⏳ Monitoramento de Aging (Dias sem Giro) e Segregação para Análise")
-        st.caption("Faixas: 🟢 0–90d (Normal) | 🟡 91–180d (Atenção) | 🟠 181–365d (Baixo Giro) | 🔴 >365d (Candidato à Obsolescência/Descarte)")
-
         sub_a1, sub_a2, sub_a3, sub_a4 = st.tabs([
-            "📊 Radar de Aging do Parque (Automático)",
+            "📊 Radar de Aging do Parque",
             "📋 Itens em Análise / Segregados sem Giro",
             "➕ Enviar Item sem Giro para Análise",
             "✏️ Editar / Atualizar Registro"
@@ -359,7 +442,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
 
         with sub_a1:
             if not df_ativos.empty:
-                df_ag = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['BAIXADO', 'ROUBADO/FURTADO'])].copy()
+                df_ag = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['BAIXADO', 'ROUBADO/FURTADO', 'INATIVADO'])].copy()
                 df_ag['Dias sem Giro'] = df_ag['atualizado_em'].apply(lambda d: int(calcular_dias_sem_mov(d)) if str(calcular_dias_sem_mov(d)).isdigit() else 0)
                 df_ag['Faixa Aging'] = df_ag['Dias sem Giro'].apply(classificar_faixa_aging)
 
@@ -381,16 +464,12 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
         with sub_a2:
             if not df_sem_giro.empty:
                 st.dataframe(df_sem_giro, use_container_width=True, hide_index=True, height=340)
-                st.download_button(
-                    "📥 Exportar Sem Giro (.xlsx)",
-                    data=converter_df_excel_simples(df_sem_giro, "Sem_Giro"),
-                    file_name=f"Equipamentos_Sem_Giro_{datetime.now().strftime('%Y%m%d')}.xlsx"
-                )
+                st.download_button("📥 Exportar Sem Giro (.xlsx)", data=converter_df_excel_simples(df_sem_giro, "Sem_Giro"), file_name=f"Equipamentos_Sem_Giro_{datetime.now().strftime('%Y%m%d')}.xlsx")
             else:
                 st.info("Nenhum equipamento enviado para análise de sem giro ainda.")
 
         with sub_a3:
-            ativos_sg = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['BAIXADO', 'ROUBADO/FURTADO'])].copy() if not df_ativos.empty else pd.DataFrame()
+            ativos_sg = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['BAIXADO', 'ROUBADO/FURTADO', 'INATIVADO'])].copy() if not df_ativos.empty else pd.DataFrame()
             df_sel_sg = operacao.render_seletor_excel_equipamentos(ativos_sg, "sem_giro_sel", multiplo=False, altura=180)
             if not df_sel_sg.empty:
                 r_sg = df_sel_sg.iloc[0].to_dict()
@@ -445,6 +524,11 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                 id_sg_ed = sel_sg.split(" | ")[0]
                 reg_sg = df_sem_giro[df_sem_giro['id_registro'] == id_sg_ed].iloc[0].to_dict()
 
+                op_st_sg = STATUS_SEM_GIRO_SUPERVISOR if is_supervisor else STATUS_SEM_GIRO_ARMAZENISTA
+                st_sg_at = str(reg_sg.get('status', 'Em análise'))
+                if st_sg_at not in op_st_sg:
+                    op_st_sg = op_st_sg + [st_sg_at]
+
                 with st.form(f"form_ed_sem_giro_{id_sg_ed}"):
                     sg1, sg2, sg3 = st.columns(3)
                     with sg1:
@@ -460,14 +544,17 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         ed_resp_sg = st.text_input("Responsável pela Análise:", value=str(reg_sg.get('responsavel', '')))
                         ap_sg_at = str(reg_sg.get('aprovacao', 'Pendente'))
                         op_ap = ["Pendente", "Aprovado", "Reprovado"]
-                        ed_ap_sg = st.selectbox("Aprovação:", op_ap, index=op_ap.index(ap_sg_at) if ap_sg_at in op_ap else 0)
+                        ed_ap_sg = st.selectbox("Aprovação (Exclusivo Supervisor):", op_ap, index=op_ap.index(ap_sg_at) if ap_sg_at in op_ap else 0, disabled=not is_supervisor)
                     with sg3:
-                        st_sg_at = str(reg_sg.get('status', 'Em análise'))
-                        ed_st_sg = st.selectbox("Status:", STATUS_SEM_GIRO, index=STATUS_SEM_GIRO.index(st_sg_at) if st_sg_at in STATUS_SEM_GIRO else 0)
-                        ed_dt_bx_sg = st.text_input("Data da Baixa (AAAA-MM-DD):", value=str(reg_sg.get('data_baixa', '')))
+                        ed_st_sg = st.selectbox("Status:", op_st_sg, index=op_st_sg.index(st_sg_at))
+                        ed_dt_bx_sg = st.text_input("Data da Baixa (AAAA-MM-DD):", value=str(reg_sg.get('data_baixa', '')), disabled=not is_supervisor)
                         ed_obs_sg = st.text_area("Observação / Justificativa:", value=str(reg_sg.get('observacao', '')))
 
                     if st.form_submit_button("💾 Salvar Edição do Sem Giro", type="primary"):
+                        if (not is_supervisor) and ed_st_sg in ["Aprovado para descarte", "Baixado"] and st_sg_at not in ["Aprovado para descarte", "Baixado"]:
+                            st.error("⛔ Apenas o Supervisor pode aprovar descarte ou efetuar baixa definitiva.")
+                            st.stop()
+
                         hoje_s = datetime.now().strftime('%Y-%m-%d')
                         dt_ap_sg = str(reg_sg.get('data_aprovacao', ''))
                         if ed_ap_sg != "Pendente" and not dt_ap_sg:
@@ -482,7 +569,7 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                             'condicao': ed_cond_sg,
                             'destinacao_proposta': ed_dest_sg,
                             'responsavel': ed_resp_sg.strip(),
-                            'aprovacao': ed_ap_sg,
+                            'aprovacao': ed_ap_sg if is_supervisor else ap_sg_at,
                             'data_aprovacao': dt_ap_sg,
                             'status': ed_st_sg,
                             'data_baixa': dt_bx_sg,
@@ -493,16 +580,13 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         if not mudancas_sg:
                             st.warning("Nenhuma alteração foi feita nos campos.")
                         else:
-                            try:
-                                supabase.table('eqp_sem_giro').update(novos_sg).eq('id_registro', id_sg_ed).execute()
-                                if ed_st_sg == "Baixado":
-                                    supabase.table('ativos_master').update({'status_sistema': 'Baixado', 'atualizado_em': hoje_s}).eq('patrimonio', reg_sg['patrimonio']).execute()
-                                registrar_log_auditoria("EDIÇÃO SEM GIRO", reg_sg['patrimonio'], f"ID {id_sg_ed} | " + " | ".join(mudancas_sg))
-                                st.cache_data.clear()
-                                st.success(f"✅ Registro `{id_sg_ed}` atualizado ({len(mudancas_sg)} campo(s) alterado(s))!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar registro: {e}")
+                            supabase.table('eqp_sem_giro').update(novos_sg).eq('id_registro', id_sg_ed).execute()
+                            if ed_st_sg == "Baixado" and is_supervisor:
+                                supabase.table('ativos_master').update({'status_sistema': 'Baixado', 'atualizado_em': hoje_s}).eq('patrimonio', reg_sg['patrimonio']).execute()
+                            registrar_log_auditoria("EDIÇÃO SEM GIRO", reg_sg['patrimonio'], f"ID {id_sg_ed} | " + " | ".join(mudancas_sg))
+                            st.cache_data.clear()
+                            st.success(f"✅ Registro `{id_sg_ed}` atualizado!")
+                            st.rerun()
             else:
                 st.info("Nenhum registro de sem giro para editar.")
 
@@ -510,9 +594,6 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
     # ABA 3: EQUIPAMENTOS SEGREGADOS PARA DESCARTE
     # ==========================================================
     with aba_descarte:
-        st.markdown("##### 🗑️ Controle de Equipamentos Segregados para Descarte")
-        st.caption("Fluxo: `Identificado -> Segregado -> Em avaliação -> Aguardando aprovação -> Aprovado para descarte -> Descartado -> Baixado`. Bloqueio automático de movimentação e exigência de evidência.")
-
         sub_d1, sub_d2, sub_d3 = st.tabs([
             "📋 Base de Segregados / Descarte (Histórico Permanente)",
             "➕ Segregar Equipamento para Descarte",
@@ -537,17 +618,12 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         "comprovante": st.column_config.LinkColumn("Comprovante (OneDrive)", display_text="🔗 Abrir Comprovante")
                     }
                 )
-                st.download_button(
-                    "📥 Exportar Segregados para Descarte (.xlsx)",
-                    data=converter_df_excel_simples(df_descarte, "Segregados_Descarte"),
-                    file_name=f"Equipamentos_Descarte_{datetime.now().strftime('%Y%m%d')}.xlsx"
-                )
+                st.download_button("📥 Exportar Segregados para Descarte (.xlsx)", data=converter_df_excel_simples(df_descarte, "Segregados_Descarte"), file_name=f"Equipamentos_Descarte_{datetime.now().strftime('%Y%m%d')}.xlsx")
             else:
                 st.info("Nenhum equipamento segregado para descarte.")
 
         with sub_d2:
-            ativos_desc = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['SEGREGADO PARA DESCARTE', 'BAIXADO', 'ROUBADO/FURTADO'])].copy() if not df_ativos.empty else pd.DataFrame()
-            st.markdown("###### 1️⃣ Selecione o equipamento para retirar de operação e segregar fisicamente:")
+            ativos_desc = df_ativos[~df_ativos['status_sistema'].astype(str).str.upper().isin(['SEGREGADO PARA DESCARTE', 'BAIXADO', 'ROUBADO/FURTADO', 'INATIVADO'])].copy() if not df_ativos.empty else pd.DataFrame()
             df_sel_d = operacao.render_seletor_excel_equipamentos(ativos_desc, "descarte_eqp_sel", multiplo=False, altura=180)
 
             if not df_sel_d.empty:
@@ -616,6 +692,11 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                 id_ds_ed = sel_ds.split(" | ")[0]
                 reg_ds = df_descarte[df_descarte['id_registro'] == id_ds_ed].iloc[0].to_dict()
 
+                op_fluxo_d = STATUS_FLUXO_DESCARTE_SUPERVISOR if is_supervisor else STATUS_FLUXO_DESCARTE_ARMAZENISTA
+                st_at_d = str(reg_ds.get('status', 'Segregado'))
+                if st_at_d not in op_fluxo_d:
+                    op_fluxo_d = op_fluxo_d + [st_at_d]
+
                 with st.form(f"form_fluxo_descarte_{id_ds_ed}"):
                     f1, f2, f3 = st.columns(3)
                     with f1:
@@ -634,16 +715,19 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                         evid_ed = st.text_input("Evidência (Link OneDrive Foto / Laudo) *:", value=str(reg_ds.get('evidencia', '')))
                         comp_ed = st.text_input("Comprovante de Descarte (Link OneDrive MTR / Recibo):", value=str(reg_ds.get('comprovante', '')))
                     with f3:
-                        st_at_d = str(reg_ds.get('status', 'Segregado'))
-                        novo_st_d = st.selectbox("Etapa / Status do Processo:", STATUS_FLUXO_DESCARTE, index=STATUS_FLUXO_DESCARTE.index(st_at_d) if st_at_d in STATUS_FLUXO_DESCARTE else 1)
+                        novo_st_d = st.selectbox("Etapa / Status do Processo:", op_fluxo_d, index=op_fluxo_d.index(st_at_d))
                         ap_at_d = str(reg_ds.get('aprovacao_descarte', 'Pendente'))
                         op_apd = ["Pendente", "Aprovado", "Reprovado"]
-                        nova_ap_d = st.selectbox("Aprovação do Descarte:", op_apd, index=op_apd.index(ap_at_d) if ap_at_d in op_apd else 0)
-                        aprovador_d = st.text_input("Aprovador:", value=str(reg_ds.get('aprovador', '')) or st.session_state.get('nome_real', ''))
-                        obs_ed_d = st.text_area("Observações / Histórico:", value=str(reg_ds.get('observacoes', '')))
+                        nova_ap_d = st.selectbox("Aprovação (Exclusivo Supervisor):", op_apd, index=op_apd.index(ap_at_d) if ap_at_d in op_apd else 0, disabled=not is_supervisor)
+                        aprovador_d = st.text_input("Aprovador:", value=str(reg_ds.get('aprovador', '')) or (st.session_state.get('nome_real', '') if is_supervisor else ''), disabled=not is_supervisor)
+                        obs_ed_d = st.text_area("Observações / Motivo:", value=str(reg_ds.get('observacoes', '')))
 
                     if st.form_submit_button("💾 Salvar Edição / Etapa do Descarte", type="primary"):
                         etapas_criticas = ["Aprovado para descarte", "Descartado", "Baixado"]
+                        if (not is_supervisor) and novo_st_d in etapas_criticas and st_at_d not in etapas_criticas:
+                            st.error("⛔ Apenas o Supervisor pode aprovar descarte, descartar ou dar baixa definitiva.")
+                            st.stop()
+
                         if novo_st_d in etapas_criticas:
                             if not evid_ed.strip() or nova_ap_d != "Aprovado" or not aprovador_d.strip():
                                 st.error("⛔ Bloqueio de Governança: Para avançar para Aprovado/Descartado/Baixado, é obrigatório informar Evidência (Foto/Laudo), Aprovação = 'Aprovado' e o nome do Aprovador.")
@@ -661,37 +745,34 @@ def render_modulo_governanca_eqp(df_ativos, df_roubo, df_sem_giro, df_descarte):
                             'destinacao_proposta': ed_dest_d,
                             'responsavel_avaliacao': ed_resp_av.strip(),
                             'status': novo_st_d,
-                            'aprovacao_descarte': nova_ap_d,
-                            'aprovador': aprovador_d.strip(),
+                            'aprovacao_descarte': nova_ap_d if is_supervisor else ap_at_d,
+                            'aprovador': aprovador_d.strip() if is_supervisor else str(reg_ds.get('aprovador', '')),
                             'evidencia': evid_ed.strip(),
                             'comprovante': comp_ed.strip(),
                             'observacoes': obs_ed_d.strip()
                         }
-                        if nova_ap_d in ["Aprovado", "Reprovado"] and not reg_ds.get('data_aprovacao'):
+                        if is_supervisor and nova_ap_d in ["Aprovado", "Reprovado"] and not reg_ds.get('data_aprovacao'):
                             upd_ds['data_aprovacao'] = hoje_s
-                        if novo_st_d == "Descartado" and not reg_ds.get('data_descarte'):
+                        if is_supervisor and novo_st_d == "Descartado" and not reg_ds.get('data_descarte'):
                             upd_ds['data_descarte'] = hoje_s
-                        if novo_st_d == "Baixado":
+                        if is_supervisor and novo_st_d == "Baixado":
                             upd_ds['data_baixa'] = hoje_s
 
                         mudancas_d = _gerar_diff_auditoria(reg_ds, upd_ds)
                         if not mudancas_d:
                             st.warning("Nenhuma alteração foi feita nos campos.")
                         else:
-                            try:
-                                supabase.table('eqp_descarte').update(upd_ds).eq('id_registro', id_ds_ed).execute()
+                            supabase.table('eqp_descarte').update(upd_ds).eq('id_registro', id_ds_ed).execute()
 
-                                if novo_st_d == "Baixado":
-                                    supabase.table('ativos_master').update({'status_sistema': 'Baixado', 'atualizado_em': hoje_s}).eq('patrimonio', reg_ds['patrimonio']).execute()
-                                elif novo_st_d.startswith("Reaproveitamento aprovado"):
-                                    supabase.table('ativos_master').update({'status_sistema': 'Disponível', 'cautela': 'ALMOXARIFADO CENTRAL', 'atualizado_em': hoje_s}).eq('patrimonio', reg_ds['patrimonio']).execute()
+                            if is_supervisor and novo_st_d == "Baixado":
+                                supabase.table('ativos_master').update({'status_sistema': 'Baixado', 'atualizado_em': hoje_s}).eq('patrimonio', reg_ds['patrimonio']).execute()
+                            elif is_supervisor and novo_st_d.startswith("Reaproveitamento aprovado"):
+                                supabase.table('ativos_master').update({'status_sistema': 'Disponível', 'cautela': 'ALMOXARIFADO CENTRAL', 'atualizado_em': hoje_s}).eq('patrimonio', reg_ds['patrimonio']).execute()
 
-                                registrar_log_auditoria("EDIÇÃO / FLUXO DESCARTE", reg_ds['patrimonio'], f"ID {id_ds_ed} | " + " | ".join(mudancas_d))
-                                st.cache_data.clear()
-                                st.success(f"✅ Processo `{id_ds_ed}` atualizado ({len(mudancas_d)} campo(s) alterado(s))!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao atualizar processo: {e}")
+                            registrar_log_auditoria("EDIÇÃO / FLUXO DESCARTE", reg_ds['patrimonio'], f"ID {id_ds_ed} | " + " | ".join(mudancas_d))
+                            st.cache_data.clear()
+                            st.success(f"✅ Processo `{id_ds_ed}` atualizado!")
+                            st.rerun()
             else:
                 st.info("Nenhum processo de descarte registrado.")
 
