@@ -1035,3 +1035,70 @@ def carregar_dados_governanca_eqp():
     df_sem_giro = _ler_tabela_segura('eqp_sem_giro', COLUNAS_SEM_GIRO)
     df_descarte = _ler_tabela_segura('eqp_descarte', COLUNAS_DESCARTE_EQP)
     return df_roubo, df_sem_giro, df_descarte
+# ==========================================
+# MATRIZ DE HIERARQUIA E PERMISSÕES (RBAC)
+# ==========================================
+PERFIS_OFICIAIS = ["Supervisor", "Armazenista", "Operação Procisa"]
+
+def normalizar_perfil(perfil_bruto):
+    p = str(perfil_bruto or "").strip().lower()
+    if p in {"supervisor", "master", "admin", "administrador", "sup. almox"}:
+        return "Supervisor"
+    if p in {"armazenista", "almoxarifado", "almox"}:
+        return "Armazenista"
+    return "Operação Procisa"
+
+MATRIZ_PERMISSOES = {
+    "Supervisor": {
+        "dashboard": "total",
+        "incluir_item": True,
+        "editar_mestre": "total",
+        "criar_solicitacao": True,
+        "aprovar_solicitacao": True,
+        "executar_mov": True,
+        "alterar_localizacao": True,
+        "roubo_furto": "total",
+        "segregar_descarte": True,
+        "aprovar_descarte_baixa": True,
+        "inativar_registro": True,
+        "exportar": "total",
+        "gestao_usuarios": True,
+        "auditoria": "total"
+    },
+    "Armazenista": {
+        "dashboard": "operacional",
+        "incluir_item": True,
+        "editar_mestre": "limitado",
+        "criar_solicitacao": True,
+        "aprovar_solicitacao": False,
+        "executar_mov": True,
+        "alterar_localizacao": True,
+        "roubo_furto": "preencher",
+        "segregar_descarte": True,
+        "aprovar_descarte_baixa": False,
+        "inativar_registro": False,
+        "exportar": "total",
+        "gestao_usuarios": False,
+        "auditoria": "consulta"
+    },
+    "Operação Procisa": {
+        "dashboard": "consulta",
+        "incluir_item": False,
+        "editar_mestre": False,
+        "criar_solicitacao": True,
+        "aprovar_solicitacao": False,
+        "executar_mov": False,
+        "alterar_localizacao": False,
+        "roubo_furto": "comunicar",
+        "segregar_descarte": False,
+        "aprovar_descarte_baixa": False,
+        "inativar_registro": False,
+        "exportar": "limitado",
+        "gestao_usuarios": False,
+        "auditoria": "proprias"
+    }
+}
+
+def obter_permissao(acao):
+    perfil_norm = normalizar_perfil(st.session_state.get('perfil', ''))
+    return MATRIZ_PERMISSOES.get(perfil_norm, MATRIZ_PERMISSOES["Operação Procisa"]).get(acao, False)
